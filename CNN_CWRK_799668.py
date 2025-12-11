@@ -1,6 +1,9 @@
+import pandas as pd
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 
 
 img_size = (32, 32,)
@@ -11,6 +14,7 @@ train_ds = tf.keras.preprocessing.image_dataset_from_directory(
     "triple_mnist/train/",
     image_size= img_size,
     batch_size=batch_Size,
+    color_mode='grayscale',
     shuffle=True
 )
 
@@ -18,6 +22,7 @@ test_ds = tf.keras.preprocessing.image_dataset_from_directory(
     "triple_mnist/test/",
     image_size = img_size,
     batch_size = batch_Size,
+    color_mode='grayscale',
     shuffle = False
 )
 
@@ -25,6 +30,7 @@ val_ds = tf.keras.preprocessing.image_dataset_from_directory(
     "triple_mnist/val/",
     image_size = img_size,
     batch_size = batch_Size,
+    color_mode='grayscale',
     shuffle = False
 )
 #getting classes names and the number of classes
@@ -36,7 +42,6 @@ num_classes = len(class_names)
 def pre_processing(img, label):
     #couldn't use the dataset straight without unpacking for normalising because its not a tuple
     img = tf.cast(img, tf.float32)/255.0
-    img = tf.image.rgb_to_grayscale(img)
 
     return img, label
 
@@ -69,4 +74,29 @@ def show_samples(dataset):
 print(show_samples(train_ds))
 
 #flatten dataset
-x = train_ds.map(img)
+def split_dataset(dataset):
+    X_List = []
+    Y_List = []
+    for images, labels in dataset.unbatch():
+        X_List.append(images.numpy())
+        Y_List.append(labels.numpy())
+
+    X = np.array(X_List, dtype=np.float32)
+    y = np.array(Y_List)
+
+    return X, y
+
+X, y = split_dataset(train_ds)
+X_flat = np.array([images.flatten() for images in X])
+
+df = pd.DataFrame(X_flat, y)
+df.to_csv("flattened.csv")
+#Linear Regression
+model = LinearRegression()
+model.fit(X_flat, y)
+
+y_pred = model.predict(X_flat)
+MSE = mean_squared_error(y, y_pred)
+r2 = r2_score(y, y_pred)
+
+print("MSE: ", MSE,"\nr2 :", r2)
