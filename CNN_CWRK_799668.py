@@ -2,8 +2,7 @@ import pandas as pd
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
+
 
 
 img_size = (32, 32,)
@@ -35,12 +34,11 @@ val_ds = tf.keras.preprocessing.image_dataset_from_directory(
 )
 #getting classes names and the number of classes
 class_names = train_ds.class_names
-num_classes = len(class_names)
+num_classes = 1000
+print(num_classes)
 
 #normalisation class, we've got three datasets so class will be quite useful
-
 def pre_processing(img, label):
-    #couldn't use the dataset straight without unpacking for normalising because its not a tuple
     img = tf.cast(img, tf.float32)/255.0
 
     return img, label
@@ -64,39 +62,31 @@ def show_samples(dataset):
         else:
             plt.imshow(img)
 
-        label_idx = np.argmax(labels[i].numpy())
+        label_idx = labels[i].numpy()
         plt.title(class_names[label_idx], fontsize=8)
         plt.axis("off")
 
     plt.show()
 
 
-print(show_samples(train_ds))
+show_samples(train_ds)
 
 #flatten dataset
 def split_dataset(dataset):
-    X_List = []
-    Y_List = []
-    for images, labels in dataset.unbatch():
-        X_List.append(images.numpy())
-        Y_List.append(labels.numpy())
+    X_batches = []
+    Y_batches = []
+    for images, labels in dataset:
+        X_batches.append(images.numpy())
+        Y_batches.append(labels.numpy())
 
-    X = np.array(X_List, dtype=np.float32)
-    y = np.array(Y_List)
+    X = np.concatenate(X_batches, axis=0)
+    y = np.concatenate(Y_batches, axis=0)
 
     return X, y
 
 X, y = split_dataset(train_ds)
 X_flat = np.array([images.flatten() for images in X])
 
-df = pd.DataFrame(X_flat, y)
-df.to_csv("flattened.csv")
-#Linear Regression
-model = LinearRegression()
-model.fit(X_flat, y)
-
-y_pred = model.predict(X_flat)
-MSE = mean_squared_error(y, y_pred)
-r2 = r2_score(y, y_pred)
-
-print("MSE: ", MSE,"\nr2 :", r2)
+df = pd.DataFrame(X_flat)
+df.insert(0, 'target', y) # Insert labels as the first column
+df.to_csv("flattened.csv", index=False)
