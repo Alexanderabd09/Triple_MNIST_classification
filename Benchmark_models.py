@@ -1,20 +1,21 @@
 import time
 import pandas as pd
 import tensorflow as tf
+from tensorflow.keras import layers, datasets, models
 import numpy as np
-import CNN_CWRK_799668
+import CNN_CWRK_799668 as cw
 from CNN_CWRK_799668 import pre_processing, split_dataset
 import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, accuracy_score
 from sklearn.linear_model import LogisticRegression
 
-
-train_ds = CNN_CWRK_799668.train_ds
-test_ds = CNN_CWRK_799668.test_ds
+print("Loading data...")
+train_ds = cw.train_ds
+test_ds = cw.test_ds
 
 # Get class information
-class_names =CNN_CWRK_799668.class_names
-num_classes = CNN_CWRK_799668.num_classes
+class_names =cw.class_names
+num_classes =cw.num_classes
 print(f"Number of classes: {num_classes}")
 print(f"Sample class names: {class_names[:10]}")
 
@@ -30,9 +31,9 @@ X_train, y_train = split_dataset(train_ds)
 X_test, y_test = split_dataset(test_ds)
 
 
-# Prepare data for each model
-X_train_lr = X_train.reshape(len(X_train), -1)
-X_test_lr = X_test.reshape(len(X_test), -1)
+# Prepare data for each model, flatten
+X_train_lr = np.array([images.flatten() for images in X_train])
+X_test_lr = np.array([images.flatten() for images in X_test])
 
 X_train_cnn = X_train
 X_test_cnn = X_test
@@ -43,26 +44,20 @@ print(f"Testing samples: {len(X_test)}")
 # Models
 model_lr = LogisticRegression(max_iter=500, multi_class='multinomial', verbose=1)
 
-model_cnn = tf.keras.Sequential([
-    tf.keras.layers.Input(shape=(32, 32, 1)),
-    tf.keras.layers.Conv2D(32, 3, activation='relu'),
-    tf.keras.layers.MaxPooling2D(),
-    tf.keras.layers.Conv2D(64, 3, activation='relu'),
-    tf.keras.layers.MaxPooling2D(),
-    tf.keras.layers.Flatten(),
-    tf.keras.layers.Dense(128, activation='relu'),
-    tf.keras.layers.Dropout(0.5),
-    tf.keras.layers.Dense(num_classes, activation='softmax')  # Use actual num_classes
-])
-
+model_cnn = models.Sequential()
+model_cnn.add(layers.Conv2D(32, (3,3), activation='relu', input_shape=(*cw.img_size, 1)))
+model_cnn.add(layers.MaxPooling2D(2,2))
+model_cnn.add(layers.Conv2D(64, (3,3), activation='relu'))
+model_cnn.add(layers.MaxPooling2D(2,2))
+model_cnn.add(layers.Conv2D(128, (3,3), activation='relu'))
+model_cnn.add(layers.MaxPooling2D(2,2))
+model_cnn.add(layers.Flatten())
+model_cnn.add(layers.Dense(512, activation='relu'))
+model_cnn.add(layers.Dropout(0.5))
+model_cnn.add(layers.Dense(num_classes, activation='softmax'))
 model_cnn.compile(
-    optimizer='adam',
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
+    loss = 'categorical_crossentropy', optimizer='adam', metrics=['accuracy']
 )
-
-
-
 
 # Benchmarking functions
 def benchmark_lr(model, X_train, X_test, y_train, y_test):
@@ -84,15 +79,16 @@ def benchmark_lr(model, X_train, X_test, y_train, y_test):
     return results
 
 
-def benchmark_cnn(model, X_train, X_test, y_train, y_test, epochs=10):
+def benchmark_cnn(model, X_train, X_test, y_train, y_test, epochs, batch_size):
     results = {}
 
     print(f"Training CNN for {epochs} epochs...")
     start = time.time()
+    y_train = tf.keras.utils.to_categorical(y_train, num_classes=num_classes)
     history = model.fit(
         X_train, y_train,
         epochs=epochs,
-        batch_size=64,
+        batch_size=batch_size ,
         validation_split=0.1,
         verbose=1
     )
@@ -121,7 +117,7 @@ results_lr = benchmark_lr(model_lr, X_train_lr, X_test_lr, y_train, y_test)
 print("\n" + "=" * 50)
 print("BENCHMARKING CNN")
 print("=" * 50)
-results_cnn = benchmark_cnn(model_cnn, X_train_cnn, X_test_cnn, y_train, y_test, epochs=5)
+results_cnn = benchmark_cnn(model_cnn, X_train_cnn, X_test_cnn, y_train, y_test, epochs=10, batch_size=64)
 
 # Create results DataFrame
 df = pd.DataFrame(
