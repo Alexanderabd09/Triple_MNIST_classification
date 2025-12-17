@@ -11,9 +11,9 @@ epochs = 10
 
 #getting the datasets
 print("\n Getting datasets ...")
-train_ds = pp.prepare_dataset("triple_mnist/train/", img_size, batch_Size)
-test_ds = pp.prepare_dataset("triple_mnist/test/", img_size, batch_Size)
-val_ds = pp.prepare_dataset("triple_mnist/val/", img_size, batch_Size)
+train_ds = pp.prepare_dataset("triple_mnist/train/", img_size, batch_Size, split = False)
+test_ds = pp.prepare_dataset("triple_mnist/test/", img_size, batch_Size, split = False)
+val_ds = pp.prepare_dataset("triple_mnist/val/", img_size, batch_Size, split = False)
 
 raw_ds = tf.keras.utils.image_dataset_from_directory(
     "triple_mnist/train/",
@@ -23,7 +23,7 @@ raw_ds = tf.keras.utils.image_dataset_from_directory(
 class_names = raw_ds.class_names
 num_classes = len(class_names)
 
-print(f"Number of classes detected: {num_classes}")
+print(f"classes detected: {num_classes}")
 pp.show_samples(train_ds, class_names)
 
 print("\nConverting datasets to arrays for benchmarking...")
@@ -31,15 +31,15 @@ X_train, y_train = pp.split_dataset(train_ds)
 X_val, y_val = pp.split_dataset(val_ds)
 X_test, y_test = pp.split_dataset(test_ds)
 
-print("\n" + "="*30)
-print("RUNNING LOGISTIC REGRESSION BENCHMARK")
-print("="*30)
+print("\n" + "_"*30)
+print("Running Logistic regression Benchmark...")
+print("_"*30)
 # Flattening is handled inside run_benchmark_lr
 results_lr = bm.run_benchmark_lr(X_train, X_test, y_train, y_test)
 
-print("\n" + "="*30)
-print("RUNNING CNN BENCHMARK")
-print("="*30)
+print("\n" + "_"*30)
+print("Running CNN benchmark...")
+print("_"*30)
 # Initialize the standard CNN model architecture
 cnn_model = bm.create_cnn_model(img_size, num_classes)
 results_cnn = bm.run_benchmark_cnn(
@@ -52,7 +52,7 @@ df_results = pd.DataFrame(
     index=['Logistic Regression', 'Standard CNN']
 )
 
-print("\n--- Final Benchmark Results ---")
+print("\nFinal Benchmark Results...")
 print(df_results[['accuracy', 'f1_score', 'training_time']])
 
 # 6. Visualization

@@ -1,10 +1,10 @@
-
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras import layers, models
 
-def prepare_dataset(path, IMG_SIZE, BATCH_SIZE):
+
+def prepare_dataset(path, IMG_SIZE, BATCH_SIZE, split=True):
     ds = tf.keras.utils.image_dataset_from_directory(
         path,
         label_mode='int',
@@ -13,28 +13,48 @@ def prepare_dataset(path, IMG_SIZE, BATCH_SIZE):
         batch_size=BATCH_SIZE,
         shuffle=True if "train" in path else False
     )
-    return ds.map(split_image_data).prefetch(tf.data.AUTOTUNE)
+    # Only map the split function if requested
+    if split:
+        return ds.map(split_image_data).prefetch(tf.data.AUTOTUNE)
+    # Otherwise just normalize for standard models
+    return ds.map(pre_processing).prefetch(tf.data.AUTOTUNE)
+
 
 def pre_processing(img, labels):
     img = tf.cast(img, tf.float32) / 255.0
     return img, labels
 
 
-def show_samples(dataset, class_names):
-    # Fixed: Moved plt.figure inside the loop or ensured it only runs once
+def show_samples(dataset, class_names=None):
     for images, labels in dataset.take(1):
+        # If images is a dict (from split_image_data), extract one part to show
+        if isinstance(images, dict):
+            display_images = images["left_in"]
+            title_prefix = "Left Strip"
+        else:
+            display_images = images
+            title_prefix = "Full Image"
+
         plt.figure(figsize=(12, 8))
-        for i in range(min(len(images), 12)):  # Added safety check for batch size
+        # Use the batch size of the actual tensor, not the dict length
+        num_to_show = min(len(display_images), 12)
+
+        for i in range(num_to_show):
             plt.subplot(3, 4, i + 1)
-            img = images[i]
+            img = display_images[i]
+
             if img.shape[-1] == 1:
                 plt.imshow(img[..., 0], cmap='gray')
             else:
                 plt.imshow(img)
 
-            label_idx = labels[i].numpy()
-            # Ensure label_idx is treated correctly if it's a multi-digit integer
-            plt.title(str(label_idx), fontsize=8)
+            # Handle dict labels or integer labels
+            if isinstance(labels, dict):
+                label_val = f"{labels['out_1'][i]}-{labels['out_2'][i]}-{labels['out_3'][i]}"
+            else:
+                label_val = class_names[labels[i]] if class_names else labels[i].numpy()
+
+            plt.title(f"{title_prefix}\nLabel: {label_val}", fontsize=8)
             plt.axis("off")
     plt.show()
 
@@ -43,6 +63,9 @@ def split_dataset(dataset):
     X_batches = []
     Y_batches = []
     for images, labels in dataset:
+        # split_dataset only works easily with non-dict data
+        if isinstance(images, dict):
+            raise ValueError("split_dataset does not support dictionary inputs. Use split=False in prepare_dataset.")
         X_batches.append(images.numpy())
         Y_batches.append(labels.numpy())
     X = np.concatenate(X_batches, axis=0)
@@ -52,50 +75,10 @@ def split_dataset(dataset):
 
 def split_image_data(img, label):
     img = tf.cast(img, tf.float32) / 255.0
+    # Axis 1 is width for (Height, Width, Channels)
     pieces = tf.split(img, num_or_size_splits=3, axis=1)
     d1 = label // 100
     d2 = (label % 100) // 10
     d3 = label % 10
-
     return {"left_in": pieces[0], "mid_in": pieces[1], "right_in": pieces[2]}, \
         {"out_1": d1, "out_2": d2, "out_3": d3}
-
-
-def build_split_cnn(num_classes=10):
-    # Shared Backbone
-    shared_backbone = models.Sequential([
-        layers.Input(shape=(84, 28, 1)),
-        layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dropout(0.3)
-    ], name="digit_feature_extractor")
-
-    # Inputs
-    in_left = layers.Input(shape=(84, 28, 1), name="left_in")
-    in_mid = layers.Input(shape=(84, 28, 1), name="mid_in")
-    in_right = layers.Input(shape=(84, 28, 1), name="right_in")
-
-    # Pass through shared weights
-    feat_left = shared_backbone(in_left)
-    feat_mid = shared_backbone(in_mid)
-    feat_right = shared_backbone(in_right)
-
-    # Outputs
-    out1 = layers.Dense(num_classes, activation='softmax', name="out_1")(feat_left)
-    out2 = layers.Dense(num_classes, activation='softmax', name="out_2")(feat_mid)
-    out3 = layers.Dense(num_classes, activation='softmax', name="out_3")(feat_right)
-
-    model = models.Model(inputs=[in_left, in_mid, in_right], outputs=[out1, out2, out3])
-
-    model.compile(
-        optimizer='adam',
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
-    return model

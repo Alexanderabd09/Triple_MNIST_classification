@@ -68,3 +68,47 @@ def run_benchmark_cnn(model, X_train, X_test, y_train, y_test, X_val, y_val, epo
     results["f1_score"] = f1_score(y_test, preds, average='macro')
     results["history"] = history.history
     return results
+
+
+def run_benchmark_split_cnn(model, train_ds, val_ds, test_ds, epochs):
+    """
+    Benchmarks the Siamese/Split CNN architecture.
+    Handles dictionary inputs/outputs directly from tf.data.Dataset.
+    """
+    results = {}
+
+    print(f"Training Split CNN for {epochs} epochs...")
+    start = time.time()
+    history = model.fit(train_ds, validation_data=val_ds, epochs=epochs, verbose=1)
+    results["training_time"] = time.time() - start
+
+    print("Evaluating Split CNN...")
+    start = time.time()
+    # Predictions will be a list of 3 arrays: [out1, out2, out3]
+    preds_raw = model.predict(test_ds, verbose=0)
+    results["prediction_time"] = time.time() - start
+
+    # Convert softmax outputs to class labels for each head
+    p1 = np.argmax(preds_raw[0], axis=1)
+    p2 = np.argmax(preds_raw[1], axis=1)
+    p3 = np.argmax(preds_raw[2], axis=1)
+
+    # Reconstruct the 3-digit number: (p1 * 100) + (p2 * 10) + p3
+    y_pred_total = (p1 * 100) + (p2 * 10) + p3
+
+    # Extract true labels from the dataset for comparison
+    y_true_batches = []
+    for _, labels in test_ds:
+        # Reconstruct true 3-digit labels from dict: {'out_1': d1, ...}
+        batch_true = (labels['out_1'].numpy() * 100) + \
+                     (labels['out_2'].numpy() * 10) + \
+                     labels['out_3'].numpy()
+        y_true_batches.append(batch_true)
+
+    y_true_total = np.concatenate(y_true_batches)
+
+    results["accuracy"] = accuracy_score(y_true_total, y_pred_total)
+    results["f1_score"] = f1_score(y_true_total, y_pred_total, average='macro')
+    results["history"] = history.history
+
+    return results, y_true_total, y_pred_total
