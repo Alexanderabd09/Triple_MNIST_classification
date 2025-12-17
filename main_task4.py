@@ -1,65 +1,52 @@
+import pandas as pd
+import Benchmark_models as bm
+import pre_processing as pp
+import visualise as vs
+import tensorflow as tf
 
+# Configuration
+IMG_SIZE = (84, 84)
+BATCH_SIZE = 64
+EPOCHS = 10
 
-# 1. Prepare Data
-print("🚀 Loading and Splitting Datasets...")
-train_ds = prepare_dataset(f"{DATA_DIR}/train")
-val_ds = prepare_dataset(f"{DATA_DIR}/val")
-test_ds = prepare_dataset(f"{DATA_DIR}/test")
+# --- STEP 1: Baseline Training (Standard CNN) ---
+print("\n--- Training Standard CNN (Task 2 Baseline) ---")
+# Load as full images (split=False)
+train_ds_std = pp.prepare_dataset("triple_mnist/train/", IMG_SIZE, BATCH_SIZE, split=False)
+val_ds_std = pp.prepare_dataset("triple_mnist/val/", IMG_SIZE, BATCH_SIZE, split=False)
+test_ds_std = pp.prepare_dataset("triple_mnist/test/", IMG_SIZE, BATCH_SIZE, split=False)
 
-# 2. Build and Train Model
-print("🏗️ Building Multi-Output CNN...")
-model = build_split_cnn()
+X_train, y_train = pp.split_dataset(train_ds_std)
+X_val, y_val = pp.split_dataset(val_ds_std)
+X_test, y_test = pp.split_dataset(test_ds_std)
 
-# Using EarlyStopping to prevent overfitting
-callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+std_cnn = bm.create_cnn_model(IMG_SIZE, num_classes=1000) # 1000 classes for 000-999
+results_std = bm.run_benchmark_cnn(std_cnn, X_train, X_test, y_train, y_test, X_val, y_val, EPOCHS, BATCH_SIZE)
 
-print("🧠 Starting Training...")
-history = model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=[callback])
+# --- STEP 2: Task 4 Training (Split Siamese CNN) ---
+print("\n--- Training Split CNN (Task 4) ---")
+# Load as 3-way split pieces (split=True)
+train_ds_split = pp.prepare_dataset("triple_mnist/train/", IMG_SIZE, BATCH_SIZE, split=True)
+val_ds_split = pp.prepare_dataset("triple_mnist/val/", IMG_SIZE, BATCH_SIZE, split=True)
+test_ds_split = pp.prepare_dataset("triple_mnist/test/", IMG_SIZE, BATCH_SIZE, split=True)
 
-# 3. Concatenate Predictions for Test Set
-print("📊 Evaluating and Concatenating Predictions...")
+split_model = pp.build_split_cnn(num_classes=10) # 10 classes per head (0-9)
+results_split, y_true, y_pred = bm.run_benchmark_split_cnn(split_model, train_ds_split, val_ds_split, test_ds_split, EPOCHS)
 
-# Get ground truth labels
-y_true_combined = []
-for _, labels in test_ds:
-    # Re-combine three separate labels back into one integer
-    combined = labels['out_1'] * 100 + labels['out_2'] * 10 + labels['out_3']
-    y_true_combined.extend(combined.numpy())
+# --- STEP 3: Comparison and Visuals ---
+df_comparison = pd.DataFrame(
+    [results_std, results_split],
+    index=['Standard CNN', 'Split CNN (Siamese)']
+)
 
-# Get model predictions (returns a list of 3 arrays)
-preds = model.predict(test_ds)
-p1 = np.argmax(preds[0], axis=1)
-p2 = np.argmax(preds[1], axis=1)
-p3 = np.argmax(preds[2], axis=1)
+print("\n" + "="*40)
+print("BENCHMARK COMPARISON")
+print("="*40)
+print(df_comparison[['accuracy', 'f1_score', 'training_time']])
 
-y_pred_combined = p1 * 100 + p2 * 10 + p3
-
-# 4. Final Metrics
-final_acc = accuracy_score(y_true_combined, y_pred_combined)
-print(f"\n✅ FINAL CONCATENATED TEST ACCURACY: {final_acc:.4f}")
-
-# 5. Visualizations
-plt.figure(figsize=(12, 5))
-
-# Plot Training Accuracy (taking average of the three heads)
-avg_val_acc = (np.array(history.history['val_out_1_accuracy']) +
-               np.array(history.history['val_out_2_accuracy']) +
-               np.array(history.history['val_out_3_accuracy'])) / 3
-
-plt.subplot(1, 2, 1)
-plt.plot(avg_val_acc, label='Average Val Accuracy')
-plt.title('Multi-Output Learning Curve')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
-
-# Confusion Matrix for the "Hundreds" digit (Head 1) as a sample
-plt.subplot(1, 2, 2)
-# Re-extract actual hundreds digit for the first head
-y_true_h = [y // 100 for y in y_true_combined]
-cm = confusion_matrix(y_true_h, p1)
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-plt.title('Confusion Matrix (First Digit Head)')
-
-plt.tight_layout()
-plt.show()
+vs.plot_benchmark_results(
+    df_comparison,
+    cnn_history=results_split['history'],
+    y_true=y_true,
+    y_pred=y_pred
+)
