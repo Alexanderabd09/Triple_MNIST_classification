@@ -3,6 +3,8 @@ import Benchmark_models as bm
 import pre_processing as pp
 import visualise as vs
 import tensorflow as tf
+import joblib
+import os
 
 
 img_size = (84, 84,)
@@ -35,7 +37,8 @@ print("\n" + "_"*30)
 print("Running Logistic regression Benchmark...")
 print("_"*30)
 # Flattening is handled inside run_benchmark_lr
-results_lr = bm.run_benchmark_lr(X_train, X_test, y_train, y_test)
+results_lr, model_lr = bm.run_benchmark_lr(X_train, X_test, y_train, y_test)
+
 
 print("\n" + "_"*30)
 print("Running CNN benchmark...")
@@ -52,8 +55,23 @@ df_results = pd.DataFrame(
     index=['Logistic Regression', 'Standard CNN']
 )
 
-print("\nFinal Benchmark Results...")
+print("\nFinal Benchmark Results... ")
 print(df_results[['accuracy', 'f1_score', 'training_time']])
+
+best_model_id = 0;
+best_model_name = df_results['accuracy'].idxmax()
+print(f"\n>>> Best performing model: {best_model_name} (Acc: {df_results.loc[best_model_name, 'accuracy']:.4f})")
+
+if best_model_name == 'Standard CNN':
+    cnn_model.save('best_model.keras')
+    print("Successfully saved CNN to 'best_model.keras'")
+    best_model_id = 1;
+
+elif best_model_name == 'Logistic Regression':
+
+    joblib.dump(model_lr, 'best_model.pkl')
+    print("Successfully saved Logistic Regression to 'best_model.pkl'")
+    best_model_id = 2;
 
 # 6. Visualization
 print("\nGenerating comparison plots...")

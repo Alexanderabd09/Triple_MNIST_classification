@@ -44,7 +44,7 @@ def run_benchmark_lr(X_train, X_test, y_train, y_test):
 
     results["accuracy"] = accuracy_score(y_test, preds)
     results["f1_score"] = f1_score(y_test, preds, average='macro')
-    return results
+    return results, model
 
 
 def run_benchmark_cnn(model, X_train, X_test, y_train, y_test, X_val, y_val, epochs, batch_size):
@@ -56,7 +56,7 @@ def run_benchmark_cnn(model, X_train, X_test, y_train, y_test, X_val, y_val, epo
         epochs=epochs,
         batch_size=batch_size,
         validation_data=(X_val, y_val),
-        verbose=1
+        verbose= 1
     )
     results["training_time"] = time.time() - start
 
@@ -79,7 +79,7 @@ def run_benchmark_split_cnn(model, train_ds, val_ds, test_ds, epochs):
 
     print(f"Training Split CNN for {epochs} epochs...")
     start = time.time()
-    history = model.fit(train_ds, validation_data=val_ds, epochs=epochs, verbose=1)
+    history = model.fit(train_ds, validation_data=val_ds, epochs=epochs, verbose= 1 )
     results["training_time"] = time.time() - start
 
     print("Evaluating Split CNN...")
