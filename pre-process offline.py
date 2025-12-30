@@ -68,9 +68,9 @@ def main():
     print("=" * 60)
 
     splits = [
-        ("triple_mnist/train", "triple_mnist_cleaned/train"),
-        ("triple_mnist/val", "triple_mnist_cleaned/val"),
-        ("triple_mnist/test", "triple_mnist_cleaned/test")
+        ("triple_mnist/train", "triple_mnist/train"),
+        ("triple_mnist/val", "triple_mnist/val"),
+        ("triple_mnist/test", "triple_mnist/test")
     ]
 
     for src, dest in splits:

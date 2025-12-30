@@ -1,11 +1,14 @@
 """
 Builder.py - All model architectures and training functions
 Contains models and utilities for Tasks 2, 4, and 5
+
+FIXED: The previous version had digit 1 dominating the shared backbone.
+This version uses THREE INDEPENDENT CNNs (one per digit position).
 """
 
 import time
 import tensorflow as tf
-from tensorflow.keras import layers, models
+from tensorflow.keras import layers, models, Model
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, accuracy_score, confusion_matrix
@@ -18,9 +21,7 @@ import os
 # ============================================================================
 
 def create_cnn_model(img_size, num_classes):
-    """
-    Creates a standard CNN model with data augmentation.
-    """
+
     augmentation = tf.keras.Sequential([
         layers.RandomTranslation(0.1, 0.1),
         layers.RandomRotation(0.05),
@@ -35,6 +36,9 @@ def create_cnn_model(img_size, num_classes):
         layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
         layers.BatchNormalization(),
         layers.MaxPooling2D(2, 2),
+        layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
+        layers.BatchNormalization(),
+        layers.MaxPooling2D(2, 2),
         layers.Dropout(0.25),
         layers.Flatten(),
         layers.Dense(256, activation='relu'),
@@ -45,9 +49,6 @@ def create_cnn_model(img_size, num_classes):
 
 
 def run_benchmark_lr(X_train, X_test, y_train, y_test, C=1.0):
-    """
-    Train and evaluate a Logistic Regression model.
-    """
     X_train_flat = X_train.reshape(len(X_train), -1)
     X_test_flat = X_test.reshape(len(X_test), -1)
 
@@ -65,9 +66,6 @@ def run_benchmark_lr(X_train, X_test, y_train, y_test, C=1.0):
 
 
 def run_benchmark_cnn(model, X_train, X_test, y_train, y_test, X_val, y_val, epochs, batch_size):
-    """
-    Train and evaluate a CNN model.
-    """
     start = time.time()
     history = model.fit(
         X_train, y_train,
@@ -89,81 +87,7 @@ def run_benchmark_cnn(model, X_train, X_test, y_train, y_test, X_val, y_val, epo
 
 
 # ============================================================================
-# TASK 4: SPLIT/SIAMESE CNN
-# ============================================================================
-
-def build_dual_path_cnn(num_classes=10, learning_rate=0.001):
-    """
-    Creates a Siamese-style CNN that processes three 84x28 strips.
-    """
-    img_in = layers.Input(shape=(84, 84, 1), name="img_in")
-
-    shared_backbone = models.Sequential([
-        layers.Input(shape=(84, 28, 1)),
-        layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        layers.Dropout(0.25),
-        layers.Flatten(),
-        layers.Dense(128, activation='relu')
-    ], name="siamese_backbone")
-
-    left_v = layers.Lambda(lambda x: x[:, :, 0:28, :])(img_in)
-    mid_v = layers.Lambda(lambda x: x[:, :, 28:56, :])(img_in)
-    right_v = layers.Lambda(lambda x: x[:, :, 56:84, :])(img_in)
-
-    f_left = shared_backbone(left_v)
-    f_mid = shared_backbone(mid_v)
-    f_right = shared_backbone(right_v)
-
-    out1 = layers.Dense(num_classes, activation='softmax', name='out_1')(f_left)
-    out2 = layers.Dense(num_classes, activation='softmax', name='out_2')(f_mid)
-    out3 = layers.Dense(num_classes, activation='softmax', name='out_3')(f_right)
-
-    model = models.Model(inputs=img_in, outputs=[out1, out2, out3])
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate),
-        loss='sparse_categorical_crossentropy',
-        metrics={'out_1': 'accuracy', 'out_2': 'accuracy', 'out_3': 'accuracy'}
-    )
-    return model
-
-
-def run_benchmark_split_cnn(model, train_ds, val_ds, test_ds, epochs):
-    """
-    Train and evaluate the split/Siamese CNN model.
-    """
-    start = time.time()
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=epochs,
-        verbose=1
-    )
-    train_time = time.time() - start
-
-    y_true = []
-    for _, batch_labels in test_ds:
-        combined = batch_labels['out_1'] * 100 + batch_labels['out_2'] * 10 + batch_labels['out_3']
-        y_true.append(combined.numpy())
-    y_true = np.concatenate(y_true)
-
-    preds_raw = model.predict(test_ds)
-    p1 = np.argmax(preds_raw[0], axis=1)
-    p2 = np.argmax(preds_raw[1], axis=1)
-    p3 = np.argmax(preds_raw[2], axis=1)
-    y_pred = (p1 * 100) + (p2 * 10) + p3
-
-    return {
-        "accuracy": accuracy_score(y_true, y_pred),
-        "f1_score": f1_score(y_true, y_pred, average='macro'),
-        "training_time": train_time,
-        "history": history.history
-    }, y_true, y_pred
-
-
-# ============================================================================
-# TASK 5A: MULTI-LABEL CNN WITHOUT SPLITTING
+# TASK 4: SPLIT CNN - REDESIGNED WITH INDEPENDENT CNNS
 # ============================================================================
 
 class AccuracyThresholdCallback(tf.keras.callbacks.Callback):
@@ -181,57 +105,67 @@ class AccuracyThresholdCallback(tf.keras.callbacks.Callback):
             self.model.stop_training = True
 
 
-def build_multilabel_cnn(img_size=(84, 84), learning_rate=0.001):
+def build_dual_path_cnn(num_classes=10, learning_rate=0.001):
     """
-    Multi-label CNN that predicts three digits simultaneously without splitting.
+    Split CNN - REDESIGNED for balanced learning.
+
+    Previous problem: With a shared backbone, digit 1's gradients dominated,
+    causing digits 2 and 3 to stay at ~10% (random chance).
+
+    Solution: THREE INDEPENDENT CNNs (one per digit position).
+    Each digit gets its own complete feature extractor.
+
+    Architecture:
+        Input (84x84) → Split into 3 strips (84x28 each)
+        Strip 1 → CNN_1 → Softmax (out_1: 0-9)
+        Strip 2 → CNN_2 → Softmax (out_2: 0-9)
+        Strip 3 → CNN_3 → Softmax (out_3: 0-9)
     """
-    inputs = layers.Input(shape=(*img_size, 1), name='img_in')
 
-    x = layers.RandomTranslation(0.1, 0.1)(inputs)
-    x = layers.RandomRotation(0.05)(x)
+    # Input: full 84x84 grayscale image
+    img_in = layers.Input(shape=(84, 84, 1), name='img_in')
 
-    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-    x = layers.Dropout(0.25)(x)
+    # Split into three 84x28 vertical strips using Cropping2D
+    left_strip = layers.Cropping2D(cropping=((0, 0), (0, 56)), name='crop_left')(img_in)
+    mid_strip = layers.Cropping2D(cropping=((0, 0), (28, 28)), name='crop_mid')(img_in)
+    right_strip = layers.Cropping2D(cropping=((0, 0), (56, 0)), name='crop_right')(img_in)
 
-    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-    x = layers.Dropout(0.25)(x)
+    def create_digit_cnn(name):
+        """Create an independent CNN for one digit position."""
+        return models.Sequential([
+            layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
 
-    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-    x = layers.Dropout(0.25)(x)
+            layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
 
-    x = layers.Flatten()(x)
-    shared_features = layers.Dense(512, activation='relu')(x)
-    shared_features = layers.Dropout(0.5)(shared_features)
+            layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
 
-    digit1_dense = layers.Dense(128, activation='relu', name='digit1_features')(shared_features)
-    digit1_dropout = layers.Dropout(0.3)(digit1_dense)
-    output_digit1 = layers.Dense(10, activation='softmax', name='out_1')(digit1_dropout)
+            layers.Flatten(),
+            layers.Dense(128, activation='relu'),
+            layers.Dropout(0.3),
+        ], name=name)
 
-    digit2_dense = layers.Dense(128, activation='relu', name='digit2_features')(shared_features)
-    digit2_dropout = layers.Dropout(0.3)(digit2_dense)
-    output_digit2 = layers.Dense(10, activation='softmax', name='out_2')(digit2_dropout)
+    # THREE SEPARATE CNNs - one for each digit
+    cnn_left = create_digit_cnn('cnn_digit1')
+    cnn_mid = create_digit_cnn('cnn_digit2')
+    cnn_right = create_digit_cnn('cnn_digit3')
 
-    digit3_dense = layers.Dense(128, activation='relu', name='digit3_features')(shared_features)
-    digit3_dropout = layers.Dropout(0.3)(digit3_dense)
-    output_digit3 = layers.Dense(10, activation='softmax', name='out_3')(digit3_dropout)
+    # Process each strip with its own CNN
+    feat_left = cnn_left(left_strip)
+    feat_mid = cnn_mid(mid_strip)
+    feat_right = cnn_right(right_strip)
 
-    model = models.Model(
-        inputs=inputs,
-        outputs=[output_digit1, output_digit2, output_digit3],
-        name='multilabel_cnn'
-    )
+    # Output heads
+    out1 = layers.Dense(num_classes, activation='softmax', name='out_1')(feat_left)
+    out2 = layers.Dense(num_classes, activation='softmax', name='out_2')(feat_mid)
+    out3 = layers.Dense(num_classes, activation='softmax', name='out_3')(feat_right)
+
+    model = Model(inputs=img_in, outputs=[out1, out2, out3])
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate),
@@ -240,58 +174,180 @@ def build_multilabel_cnn(img_size=(84, 84), learning_rate=0.001):
             'out_2': 'sparse_categorical_crossentropy',
             'out_3': 'sparse_categorical_crossentropy'
         },
+        loss_weights={'out_1': 1.0, 'out_2': 1.0, 'out_3': 1.0},
         metrics={
             'out_1': 'accuracy',
             'out_2': 'accuracy',
             'out_3': 'accuracy'
         }
     )
+
+    return model
+
+
+def run_benchmark_split_cnn(model, train_ds, val_ds, test_ds, epochs):
+    """Train and evaluate the split CNN model."""
+
+    early_stop = tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=5,
+        restore_best_weights=True,
+        verbose=1
+    )
+
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=2,
+        min_lr=1e-6,
+        verbose=1
+    )
+
+    start = time.time()
+    history = model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=epochs,
+        callbacks=[early_stop, reduce_lr],
+        verbose=1
+    )
+    train_time = time.time() - start
+
+    # Evaluate on test set
+    print("\nEvaluating on test set...")
+
+    all_images = []
+    all_labels_1 = []
+    all_labels_2 = []
+    all_labels_3 = []
+
+    for batch_images, batch_labels in test_ds:
+        all_images.append(batch_images.numpy())
+        all_labels_1.append(batch_labels['out_1'].numpy())
+        all_labels_2.append(batch_labels['out_2'].numpy())
+        all_labels_3.append(batch_labels['out_3'].numpy())
+
+    X_test = np.concatenate(all_images, axis=0)
+    y1_true = np.concatenate(all_labels_1, axis=0)
+    y2_true = np.concatenate(all_labels_2, axis=0)
+    y3_true = np.concatenate(all_labels_3, axis=0)
+
+    y_true = y1_true * 100 + y2_true * 10 + y3_true
+
+    preds_raw = model.predict(X_test, verbose=0)
+    p1 = np.argmax(preds_raw[0], axis=1)
+    p2 = np.argmax(preds_raw[1], axis=1)
+    p3 = np.argmax(preds_raw[2], axis=1)
+    y_pred = (p1 * 100) + (p2 * 10) + p3
+
+    acc_1 = accuracy_score(y1_true, p1)
+    acc_2 = accuracy_score(y2_true, p2)
+    acc_3 = accuracy_score(y3_true, p3)
+
+    print(f"\nPer-digit test accuracies:")
+    print(f"  Digit 1 (left):   {acc_1:.4f}")
+    print(f"  Digit 2 (middle): {acc_2:.4f}")
+    print(f"  Digit 3 (right):  {acc_3:.4f}")
+    print(f"  Combined (product): {acc_1 * acc_2 * acc_3:.4f}")
+
+    return {
+        "accuracy": accuracy_score(y_true, y_pred),
+        "f1_score": f1_score(y_true, y_pred, average='macro'),
+        "training_time": train_time,
+        "history": history.history,
+        "per_digit_accuracy": {
+            "digit_1": acc_1,
+            "digit_2": acc_2,
+            "digit_3": acc_3
+        }
+    }, y_true, y_pred
+
+
+# ============================================================================
+# TASK 5A: MULTI-LABEL CNN WITHOUT SPLITTING
+# ============================================================================
+
+
+
+def build_multilabel_cnn(img_size=(84, 84), learning_rate=0.001):
+    inputs = layers.Input(shape=(*img_size, 1), name='img_in')
+
+    x = layers.RandomTranslation(0.1, 0.1)(inputs)
+    x = layers.RandomRotation(0.05)(x)
+
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+    x = layers.Conv2D(256, (3, 3), activation='relu', padding='same')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+    x = layers.Flatten()(x)
+    x = layers.Dropout(0.5)(x)
+    shared = layers.Dense(512, activation='relu', name='shared_dense')(x)
+
+    out1 = layers.Dense(10, activation='softmax', name='out_1')(shared)
+    out2 = layers.Dense(10, activation='softmax', name='out_2')(shared)
+    out3 = layers.Dense(10, activation='softmax', name='out_3')(shared)
+
+    model = models.Model(inputs=inputs, outputs=[out1, out2, out3])
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
     return model
 
 
 def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15):
-    """
-    Train and evaluate multi-label CNN.
-    """
-    print("\n[1/3] Building multi-label CNN...")
     model = build_multilabel_cnn()
-
-    def extract_images(inputs, labels):
-        if isinstance(inputs, dict):
-            return inputs['img_in'], labels
-        return inputs, labels
-
-    train_ds_extracted = train_ds.map(extract_images)
-    val_ds_extracted = val_ds.map(extract_images)
 
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor='val_loss',
-        patience=3,
+        patience=5,
         restore_best_weights=True,
         verbose=1
     )
     high_accuracy_stop = AccuracyThresholdCallback(threshold=0.89)
 
-    print("\n[2/3] Training model...")
     start_time = time.time()
     history = model.fit(
-        train_ds_extracted,
-        validation_data=val_ds_extracted,
+        train_ds,
+        validation_data=val_ds,
         epochs=epochs,
         callbacks=[early_stop, high_accuracy_stop],
         verbose=1
     )
     training_time = time.time() - start_time
 
-    print("\n[3/3] Evaluating on test set...")
-    y_true = []
-    for _, batch_labels in test_ds:
-        combined = batch_labels['out_1'] * 100 + batch_labels['out_2'] * 10 + batch_labels['out_3']
-        y_true.append(combined.numpy())
-    y_true = np.concatenate(y_true)
+    all_images = []
+    all_labels_1 = []
+    all_labels_2 = []
+    all_labels_3 = []
 
-    test_ds_extracted = test_ds.map(extract_images)
-    preds_raw = model.predict(test_ds_extracted, verbose=0)
+    for batch_images, batch_labels in test_ds:
+        all_images.append(batch_images.numpy())
+        all_labels_1.append(batch_labels['out_1'].numpy())
+        all_labels_2.append(batch_labels['out_2'].numpy())
+        all_labels_3.append(batch_labels['out_3'].numpy())
+
+    X_test = np.concatenate(all_images, axis=0)
+    y1_true = np.concatenate(all_labels_1, axis=0)
+    y2_true = np.concatenate(all_labels_2, axis=0)
+    y3_true = np.concatenate(all_labels_3, axis=0)
+
+    y_true = y1_true * 100 + y2_true * 10 + y3_true
+
+    preds_raw = model.predict(X_test, verbose=0)
     p1 = np.argmax(preds_raw[0], axis=1)
     p2 = np.argmax(preds_raw[1], axis=1)
     p3 = np.argmax(preds_raw[2], axis=1)
@@ -302,14 +358,12 @@ def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15):
         'history': history.history,
         'accuracy': accuracy_score(y_true, y_pred),
         'f1_score': f1_score(y_true, y_pred, average='macro'),
-        'training_time': training_time,
-        'y_true': y_true,
-        'y_pred': y_pred
+        'training_time': training_time
     }
 
 
 # ============================================================================
-# TASK 5B: DCGAN IMPLEMENTATION
+# TASK 5B: GAN (DCGAN)
 # ============================================================================
 
 def build_generator(latent_dim=100):
@@ -433,9 +487,6 @@ def visualize_gan_training(gan, d_losses, g_losses, d_accuracies):
 
 def train_with_augmented_data(gan, train_ds, val_ds, test_ds, X_train_real, y_train_real,
                               num_synthetic=10000, epochs=15, batch_size=128):
-    """
-    Train multi-label CNN with GAN-augmented data using Early Stopping and Accuracy Threshold logic.
-    """
     print(f"\n[1/4] Generating {num_synthetic} synthetic images...")
     synthetic_images = gan.generate_images(num_synthetic)
 
@@ -467,7 +518,6 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds, X_train_real, y_tr
 
     model_augmented = build_multilabel_cnn()
 
-
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor='val_loss',
         patience=3,
@@ -475,7 +525,6 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds, X_train_real, y_tr
         verbose=1
     )
     high_accuracy_stop = AccuracyThresholdCallback(threshold=0.89)
-
 
     print("\n[3/4] Training on augmented data...")
     start_time = time.time()
@@ -488,7 +537,6 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds, X_train_real, y_tr
     )
     training_time_augmented = time.time() - start_time
 
-    # Visualization
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.plot(history.history['loss'], label='Train Loss'); plt.plot(history.history['val_loss'], label='Val Loss')
@@ -499,13 +547,29 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds, X_train_real, y_tr
     plt.savefig('augmented_training_curves.png'); plt.close()
 
     print("\n[4/4] Evaluating augmented model...")
-    y_true = []
-    for _, batch_labels in test_ds:
-        y_true.append((batch_labels['out_1'] * 100 + batch_labels['out_2'] * 10 + batch_labels['out_3']).numpy())
-    y_true = np.concatenate(y_true)
 
-    preds_raw = model_augmented.predict(test_ds_extracted, verbose=0)
-    p1, p2, p3 = np.argmax(preds_raw[0], axis=1), np.argmax(preds_raw[1], axis=1), np.argmax(preds_raw[2], axis=1)
+    all_images = []
+    all_labels_1 = []
+    all_labels_2 = []
+    all_labels_3 = []
+
+    for batch_images, batch_labels in test_ds:
+        all_images.append(batch_images.numpy())
+        all_labels_1.append(batch_labels['out_1'].numpy())
+        all_labels_2.append(batch_labels['out_2'].numpy())
+        all_labels_3.append(batch_labels['out_3'].numpy())
+
+    X_test = np.concatenate(all_images, axis=0)
+    y1_true = np.concatenate(all_labels_1, axis=0)
+    y2_true = np.concatenate(all_labels_2, axis=0)
+    y3_true = np.concatenate(all_labels_3, axis=0)
+
+    y_true = y1_true * 100 + y2_true * 10 + y3_true
+
+    preds_raw = model_augmented.predict(X_test, verbose=0)
+    p1 = np.argmax(preds_raw[0], axis=1)
+    p2 = np.argmax(preds_raw[1], axis=1)
+    p3 = np.argmax(preds_raw[2], axis=1)
     y_pred = (p1 * 100) + (p2 * 10) + p3
 
     return {

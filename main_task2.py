@@ -1,78 +1,188 @@
 import pandas as pd
-import Benchmark_models as bm
-import pre_processing as pp
-import visualise as vs
+import numpy as np
 import tensorflow as tf
 import joblib
-import os
+import Builder as bm
+import pre_processing as pp
+import visualise as vs
+
+devices = tf.config.list_physical_devices()
+print(f"Total available devices: {devices}")
+
+gpu_devices = tf.config.list_physical_devices('GPU')
+
+if gpu_devices:
+    try:
+        for gpu in gpu_devices:
+            tf.config.experimental.set_memory_growth(gpu, True)
+
+        tf.config.set_visible_devices(gpu_devices[0], 'GPU')
+        print(f"SUCCESS: M2 GPU ('{gpu_devices[0].name}') is active.")
+    except RuntimeError as e:
+        print(f"GPU Configuration Error: {e}")
+else:
+    print("GPU NOT found. Using CPU.")
+
+tf.config.set_soft_device_placement(True)
 
 
-img_size = (84, 84,)
-batch_Size = 64
-epochs = 10
+def main():
+    """
+    Main script for Task 2: Benchmark comparison between Logistic Regression and CNN.
+    Includes hyperparameter tuning, model training, evaluation, and visualization.
+    """
+    # Configuration
+    img_size = (84, 84)
+    batch_size = 128
+    epochs = 10
 
-#getting the datasets
-print("\n Getting datasets ...")
-train_ds = pp.prepare_dataset("triple_mnist/train/", img_size, batch_Size, split = False)
-test_ds = pp.prepare_dataset("triple_mnist/test/", img_size, batch_Size, split = False)
-val_ds = pp.prepare_dataset("triple_mnist/val/", img_size, batch_Size, split = False)
+    # For testing/debugging, set to True to use subset of data
+    USE_SUBSET = False  # Set to True for quick testing (~15 min vs 1-2 hours)
+    SUBSET_SIZE = 5000
 
-raw_ds = tf.keras.utils.image_dataset_from_directory(
-    "triple_mnist/train/",
-    image_size=img_size,
-    batch_size=batch_Size,
-)
-class_names = raw_ds.class_names
-num_classes = len(class_names)
+    print("=" * 60)
+    print("TASK 2: Model Benchmarking (Logistic Regression vs CNN)")
+    print("=" * 60)
 
-print(f"classes detected: {num_classes}")
-pp.show_samples(train_ds, class_names)
+    # 1. Load and prepare datasets
+    print("\n[1/5] Loading datasets...")
+    train_ds = pp.prepare_dataset("triple_mnist/train/", img_size, batch_size)
+    val_ds = pp.prepare_dataset("triple_mnist/val/", img_size, batch_size)
+    test_ds = pp.prepare_dataset("triple_mnist/test/", img_size, batch_size)
 
-print("\nConverting datasets to arrays for benchmarking...")
-X_train, y_train = pp.split_dataset(train_ds)
-X_val, y_val = pp.split_dataset(val_ds)
-X_test, y_test = pp.split_dataset(test_ds)
+    # Convert to NumPy arrays for scikit-learn compatibility
+    X_train, y_train = pp.split_dataset(train_ds)
+    X_val, y_val = pp.split_dataset(val_ds)
+    X_test, y_test = pp.split_dataset(test_ds)
 
-print("\n" + "_"*30)
-print("Running Logistic regression Benchmark...")
-print("_"*30)
-# Flattening is handled inside run_benchmark_lr
-results_lr, model_lr = bm.run_benchmark_lr(X_train, X_test, y_train, y_test)
+    # Optional: Use subset for faster testing/debugging
+    if USE_SUBSET:
+        print(f"\n{'=' * 60}")
+        print(f"⚠️  WARNING: DEBUG MODE ACTIVE")
+        print(f"{'=' * 60}")
+        print(f"Using only {SUBSET_SIZE} samples for quick testing.")
+        print(f"Results will be POOR because:")
+        print(f"  - Very few samples per class")
+        print(f"  - Test set may have unseen classes")
+        print(f"Set USE_SUBSET=False for real training!")
+        print(f"{'=' * 60}\n")
+        X_train = X_train[:SUBSET_SIZE]
+        y_train = y_train[:SUBSET_SIZE]
+        X_val = X_val[:SUBSET_SIZE // 4]
+        y_val = y_val[:SUBSET_SIZE // 4]
+        X_test = X_test[:SUBSET_SIZE // 4]
+        y_test = y_test[:SUBSET_SIZE // 4]
+
+    # Determine number of classes from the data
+    num_classes = len(np.unique(y_train))
+    train_classes = set(y_train)
+    test_classes = set(y_test)
+    unseen_classes = test_classes - train_classes
+
+    print(f"Training samples: {len(X_train)}")
+    print(f"Validation samples: {len(X_val)}")
+    print(f"Test samples: {len(X_test)}")
+    print(f"Number of classes in training: {num_classes}")
+    print(f"Number of classes in test: {len(test_classes)}")
+
+    if unseen_classes:
+        print(f"\n⚠️  WARNING: Test set contains {len(unseen_classes)} classes not in training!")
+        print(f"These classes will have 0% accuracy.")
+        if USE_SUBSET:
+            print(f"This is expected in DEBUG mode. Turn off USE_SUBSET for full dataset.")
+
+    # 2. Hyperparameter tuning for Logistic Regression
+    print("\n[2/5] Tuning Logistic Regression hyperparameters...")
+    print("NOTE: This may take 10-20 minutes depending on dataset size...")
+    lr_tune = []
+    for c in [0.1, 1.0]:
+        print(f"  Testing C={c}...")
+        res, _ = bm.run_benchmark_lr(X_train, X_val, y_train, y_val, C=c)
+        lr_tune.append({'param': c, 'val_accuracy': res['accuracy']})
+        print(f"    Validation Accuracy: {res['accuracy']:.4f}")
+
+    best_c = max(lr_tune, key=lambda x: x['val_accuracy'])['param']
+    print(f"  Best C parameter: {best_c}")
+
+    # 3. Hyperparameter tuning for CNN
+    print("\n[3/5] Tuning CNN hyperparameters...")
+    cnn_tune = []
+    for lr_rate in [1e-3, 1e-4]:
+        print(f"  Testing learning rate={lr_rate}...")
+        model = bm.create_cnn_model(img_size, num_classes)
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(lr_rate),
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        h = model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=2,
+            batch_size=batch_size,
+            verbose=0
+        )
+        cnn_tune.append({'param': lr_rate, 'val_accuracy': h.history['val_accuracy'][-1]})
+        print(f"    Validation Accuracy: {h.history['val_accuracy'][-1]:.4f}")
+
+    best_lr = max(cnn_tune, key=lambda x: x['val_accuracy'])['param']
+    print(f"  Best learning rate: {best_lr}")
+
+    # 4. Train final models with best hyperparameters
+    print("\n[4/5] Training final models on full training set...")
+
+    # Logistic Regression
+    print("  Training Logistic Regression...")
+    res_lr, model_lr = bm.run_benchmark_lr(X_train, X_test, y_train, y_test, C=best_c)
+    print(f"    Test Accuracy: {res_lr['accuracy']:.4f}")
+    print(f"    Test F1 Score: {res_lr['f1_score']:.4f}")
+    print(f"    Training Time: {res_lr['training_time']:.2f}s")
+
+    # CNN
+    print("  Training CNN...")
+    final_cnn = bm.create_cnn_model(img_size, num_classes)
+    final_cnn.compile(
+        optimizer=tf.keras.optimizers.Adam(best_lr),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    res_cnn = bm.run_benchmark_cnn(
+        final_cnn, X_train, X_test, y_train, y_test, X_val, y_val, epochs, batch_size
+    )
+    print(f"    Test Accuracy: {res_cnn['accuracy']:.4f}")
+    print(f"    Test F1 Score: {res_cnn['f1_score']:.4f}")
+    print(f"    Training Time: {res_cnn['training_time']:.2f}s")
+
+    # 5. Create comparison DataFrame
+    df_results = pd.DataFrame(
+        [res_lr, res_cnn],
+        index=['Logistic Regression', 'Standard CNN']
+    )
+
+    print("\n" + "=" * 60)
+    print("RESULTS SUMMARY")
+    print("=" * 60)
+    print(df_results.to_string())
+    print("=" * 60)
+
+    # Save the best model
+    print("\n[5/5] Saving best model...")
+    if res_lr['accuracy'] > res_cnn['accuracy']:
+        joblib.dump(model_lr, 'best_model.pkl')
+        print("Logistic Regression performed better.")
+        print("Saved: best_model.pkl")
+    else:
+        final_cnn.save('best_model.keras')
+        print("CNN performed better.")
+        print("Saved: best_model.keras")
+
+    # Generate visualizations
+    print("\nGenerating visualizations...")
+    cnn_preds = np.argmax(final_cnn.predict(X_test, verbose=0), axis=1)
+    vs.plot_benchmark_results(df_results, res_cnn['history'], lr_tune, y_test, cnn_preds)
+
+    print("\nTask 2 completed successfully!")
 
 
-print("\n" + "_"*30)
-print("Running CNN benchmark...")
-print("_"*30)
-# Initialize the standard CNN model architecture
-cnn_model = bm.create_cnn_model(img_size, num_classes)
-results_cnn = bm.run_benchmark_cnn(
-    cnn_model, X_train, X_test, y_train, y_test,
-    X_val, y_val, epochs=epochs, batch_size=batch_Size
-)
-
-df_results = pd.DataFrame(
-    [results_lr, results_cnn],
-    index=['Logistic Regression', 'Standard CNN']
-)
-
-print("\nFinal Benchmark Results... ")
-print(df_results[['accuracy', 'f1_score', 'training_time']])
-
-best_model_id = 0;
-best_model_name = df_results['accuracy'].idxmax()
-print(f"\n>>> Best performing model: {best_model_name} (Acc: {df_results.loc[best_model_name, 'accuracy']:.4f})")
-
-if best_model_name == 'Standard CNN':
-    cnn_model.save('best_model.keras')
-    print("Successfully saved CNN to 'best_model.keras'")
-    best_model_id = 1;
-
-elif best_model_name == 'Logistic Regression':
-
-    joblib.dump(model_lr, 'best_model.pkl')
-    print("Successfully saved Logistic Regression to 'best_model.pkl'")
-    best_model_id = 2;
-
-# 6. Visualization
-print("\nGenerating comparison plots...")
-vs.plot_benchmark_results(df_results, cnn_history=results_cnn.get('history'))
+if __name__ == "__main__":
+    main()

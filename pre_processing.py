@@ -1,156 +1,211 @@
 import tensorflow as tf
 import numpy as np
+import os
 import matplotlib.pyplot as plt
-from tensorflow.keras import layers, models
 
 
-def prepare_dataset(path, IMG_SIZE, BATCH_SIZE, split=True):
+def prepare_dataset(path, IMG_SIZE, BATCH_SIZE, split=False):
+    """
+    Prepares a TensorFlow dataset from a directory of images.
+
+    Args:
+        path: Path to directory containing class subdirectories
+        IMG_SIZE: Tuple of (height, width) for resizing images
+        BATCH_SIZE: Number of samples per batch
+        split: If True, format data for split/Siamese model with separate digit labels
+
+    Returns:
+        TensorFlow dataset ready for training/evaluation
+    """
+    # Get sorted list of existing folders to maintain consistent class ordering
+    existing_folders = sorted([
+        f for f in os.listdir(path)
+        if os.path.isdir(os.path.join(path, f))
+    ])
+
+    # Load dataset from directory
     ds = tf.keras.utils.image_dataset_from_directory(
         path,
+        labels='inferred',
         label_mode='int',
         color_mode='grayscale',
         image_size=IMG_SIZE,
         batch_size=BATCH_SIZE,
+        class_names=existing_folders,
         shuffle=True if "train" in path else False
     )
 
-    # Apply the appropriate transformation
+    # Map inferred indices to actual folder numbers (e.g., folder '005' -> integer 5)
+    folder_to_actual_int = np.array([int(f) for f in existing_folders])
+
+    def transform_data(x, y):
+        """Normalize images and map labels to actual class numbers."""
+        x = tf.cast(x, tf.float32) / 255.0
+        y_actual = tf.gather(folder_to_actual_int, y)
+        return x, y_actual
+
+    ds = ds.map(transform_data, num_parallel_calls=tf.data.AUTOTUNE)
+
+    # If split mode, format for multi-output model
     if split:
-        ds = ds.map(split_image_data, num_parallel_calls=tf.data.AUTOTUNE)
-    else:
-        ds = ds.map(pre_processing, num_parallel_calls=tf.data.AUTOTUNE)
-    return ds.cache().prefetch(tf.data.AUTOTUNE)
+        def split_transform(image, label_idx):
+            """Transform for split model."""
+            label_idx = tf.cast(label_idx, tf.int32)
 
+            # Split 3-digit number into individual digits
+            digit1 = label_idx // 100
+            digit2 = (label_idx % 100) // 10
+            digit3 = label_idx % 10
 
-def pre_processing(img, labels):
-    img = tf.cast(img, tf.float32) / 255.0
-    return img, labels
+            return (
+                {"img_in": image},
+                {"out_1": digit1, "out_2": digit2, "out_3": digit3}
+            )
 
+        ds = ds.map(split_transform, num_parallel_calls=tf.data.AUTOTUNE)
 
-def show_samples(dataset, class_names=None):
-    for images, labels in dataset.take(1):
-        # If images is a dict (from split_image_data), extract one part to show
-        if isinstance(images, dict):
-            display_images = images["left_in"]
-            title_prefix = "Left Strip"
-        else:
-            display_images = images
-            title_prefix = "Full Image"
-
-        plt.figure(figsize=(12, 8))
-        # Use the batch size of the actual tensor, not the dict length
-        num_to_show = min(len(display_images), 12)
-
-        for i in range(num_to_show):
-            plt.subplot(3, 4, i + 1)
-            img = display_images[i]
-
-            if img.shape[-1] == 1:
-                plt.imshow(img[..., 0], cmap='gray')
-            else:
-                plt.imshow(img)
-
-            # Handle dict labels or integer labels
-            if isinstance(labels, dict):
-                label_val = f"{labels['out_1'][i]}-{labels['out_2'][i]}-{labels['out_3'][i]}"
-            else:
-                label_val = class_names[labels[i]] if class_names else labels[i].numpy()
-
-            plt.title(f"{title_prefix}\nLabel: {label_val}", fontsize=8)
-            plt.axis("off")
-    plt.show()
+    return ds.prefetch(buffer_size=tf.data.AUTOTUNE)
 
 
 def split_dataset(dataset):
-    X_batches = []
-    Y_batches = []
+    """
+    Converts a TensorFlow dataset into NumPy arrays.
+
+    Args:
+        dataset: TensorFlow dataset
+
+    Returns:
+        Tuple of (X, y) as NumPy arrays
+    """
+    X_list, y_list = [], []
     for images, labels in dataset:
-        # split_dataset only works easily with non-dict data
-        if isinstance(images, dict):
-            raise ValueError("split_dataset does not support dictionary inputs. Use split=False in prepare_dataset.")
-        X_batches.append(images.numpy())
-        Y_batches.append(labels.numpy())
-    X = np.concatenate(X_batches, axis=0)
-    y = np.concatenate(Y_batches, axis=0)
-    return X, y
+        X_list.append(images.numpy())
+        y_list.append(labels.numpy())
+    return np.concatenate(X_list, axis=0), np.concatenate(y_list, axis=0)
 
 
-def split_image_data(img, label):
-    # Normalize the image pixels to [0, 1]
-    img = tf.cast(img, tf.float32) / 255.0
+def show_samples(dataset_path, num_samples=16, img_size=(84, 84), save_path='dataset_samples.png'):
+    """
+    Display and save random samples from the Triple-MNIST dataset.
 
-    # Image input shape is (84, 84, 1)
-    # Split across the width (axis=1) into 3 vertical strips of (84, 28, 1)
-    pieces = tf.split(img, num_or_size_splits=3, axis=1)
+    Args:
+        dataset_path: Path to dataset directory (e.g., "triple_mnist_cleaned/train/")
+        num_samples: Number of samples to display (default: 16, must be perfect square)
+        img_size: Image size tuple (height, width)
+        save_path: Path to save the visualization
 
-    # Ensure the tensors are explicitly shaped for the model input layers
-    left = tf.reshape(pieces[0], (84, 28, 1))
-    mid = tf.reshape(pieces[1], (84, 28, 1))
-    right = tf.reshape(pieces[2], (84, 28, 1))
+    Returns:
+        None (displays and saves visualization)
+    """
+    print(f"\n{'=' * 70}")
+    print(f"LOADING SAMPLES FROM: {dataset_path}")
+    print(f"{'=' * 70}\n")
 
-    # --- Label Splitting Logic ---
-    # Convert integer label (e.g., 123) to a zero-padded string "123"
-    # we use {:03d} to ensure labels like '5' become '005'
-    label_str = tf.strings.format("{:03d}", [label])
+    # Load dataset
+    ds = prepare_dataset(dataset_path, img_size, batch_size=num_samples, split=False)
 
-    # Get the single string from the batch tensor
-    label_str_scalar = label_str[0]
+    # Get one batch of samples
+    for images, labels in ds.take(1):
+        images_np = images.numpy()
+        labels_np = labels.numpy()
+        break
 
-    # Slice the string to get individual digit characters
-    d1_str = tf.strings.substr(label_str_scalar, 0, 1)  # Hundreds place
-    d2_str = tf.strings.substr(label_str_scalar, 1, 1)  # Tens place
-    d3_str = tf.strings.substr(label_str_scalar, 2, 1)  # Units place
+    # Calculate grid size
+    grid_size = int(np.sqrt(num_samples))
 
-    # Convert characters back to integers (0-9)
-    d1 = tf.strings.to_number(d1_str, out_type=tf.int32)
-    d2 = tf.strings.to_number(d2_str, out_type=tf.int32)
-    d3 = tf.strings.to_number(d3_str, out_type=tf.int32)
+    # Create figure
+    fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12))
+    fig.suptitle(f'Random Samples from Triple-MNIST Dataset\nPath: {dataset_path}',
+                 fontsize=16, weight='bold', y=0.995)
 
-    # Return a tuple: (inputs dictionary, outputs dictionary)
-    # Keys must match the 'name' attributes of the layers in your Keras model
-    return (
-        {"left_in": left, "mid_in": mid, "right_in": right},
-        {"out_1": d1, "out_2": d2, "out_3": d3}
-    )
+    # Display images
+    for idx, ax in enumerate(axes.flat):
+        if idx < num_samples:
+            # Display image
+            ax.imshow(images_np[idx, :, :, 0], cmap='gray')
+
+            # Format label (3-digit number)
+            label = int(labels_np[idx])
+            digit1 = label // 100
+            digit2 = (label % 100) // 10
+            digit3 = label % 10
+
+            # Add title with label
+            ax.set_title(f'Label: {label:03d} ({digit1}-{digit2}-{digit3})',
+                         fontsize=10, pad=5)
+            ax.axis('off')
+        else:
+            ax.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Visualization saved as '{save_path}'")
+    plt.show()
+
+    # Print statistics
+    print(f"\n{'=' * 70}")
+    print("DATASET STATISTICS")
+    print(f"{'=' * 70}")
+    print(f"Number of samples shown: {num_samples}")
+    print(f"Image shape: {images_np[0].shape}")
+    print(f"Image data type: {images_np[0].dtype}")
+    print(f"Pixel value range: [{images_np.min():.3f}, {images_np.max():.3f}]")
+    print(f"\nLabels shown: {', '.join([f'{int(l):03d}' for l in labels_np])}")
+
+    # Analyze label distribution
+    unique_labels = np.unique(labels_np)
+    print(f"\nUnique labels in batch: {len(unique_labels)}")
+    print(f"Label range: {int(labels_np.min()):03d} - {int(labels_np.max()):03d}")
+    print(f"{'=' * 70}\n")
 
 
-def build_split_cnn(num_classes=10):
-    # Define the 3 separate inputs (Strips are 84 high x 28 wide)
-    input_left = layers.Input(shape=(84, 28, 1), name="left_in")
-    input_mid = layers.Input(shape=(84, 28, 1), name="mid_in")
-    input_right = layers.Input(shape=(84, 28, 1), name="right_in")
+def analyze_dataset_structure(base_path="triple_mnist"):
+    """
+    Analyze and report on the dataset structure.
 
-    # Define a shared feature extractor (Siamese approach)
-    # This allows the model to learn "what a digit looks like" using all three strips
-    shared_conv = models.Sequential([
-        layers.Conv2D(32, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
-        layers.Flatten(),
-        layers.Dense(128, activation='relu')
-    ])
+    Args:
+        base_path: Base path to the dataset
 
-    # Pass each input through the same shared layers
-    feat_left = shared_conv(input_left)
-    feat_mid = shared_conv(input_mid)
-    feat_right = shared_conv(input_right)
+    Returns:
+        Dictionary with dataset statistics
+    """
+    print(f"\n{'=' * 70}")
+    print("DATASET STRUCTURE ANALYSIS")
+    print(f"{'=' * 70}\n")
 
-    # 3 Separate Output Heads (one for each digit position)
-    output_left = layers.Dense(num_classes, activation='softmax', name="out_1")(feat_left)
-    output_mid = layers.Dense(num_classes, activation='softmax', name="out_2")(feat_mid)
-    output_right = layers.Dense(num_classes, activation='softmax', name="out_3")(feat_right)
+    splits = ['train', 'val', 'test']
+    stats = {}
 
-    # Build the final multi-input, multi-output model
-    model = models.Model(
-        inputs=[input_left, input_mid, input_right],
-        outputs=[output_left, output_mid, output_right]
-    )
+    for split in splits:
+        split_path = os.path.join(base_path, split)
 
-    model.compile(
-        optimizer='adam',
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
+        if not os.path.exists(split_path):
+            print(f"❌ {split_path} does not exist!")
+            continue
 
-    return model
+        # Get all class folders
+        class_folders = sorted([
+            f for f in os.listdir(split_path)
+            if os.path.isdir(os.path.join(split_path, f))
+        ])
+
+        # Count images per class
+        total_images = 0
+        for folder in class_folders:
+            folder_path = os.path.join(split_path, folder)
+            images = [f for f in os.listdir(folder_path) if f.endswith('.png')]
+            total_images += len(images)
+
+        stats[split] = {
+            'num_classes': len(class_folders),
+            'total_images': total_images,
+            'avg_per_class': total_images / len(class_folders) if class_folders else 0
+        }
+
+        print(f"{split.upper()} SET:")
+        print(f"  Classes: {stats[split]['num_classes']}")
+        print(f"  Total images: {stats[split]['total_images']}")
+        print(f"  Avg images/class: {stats[split]['avg_per_class']:.1f}\n")
+
+    print(f"{'=' * 70}\n")
+    return stats
