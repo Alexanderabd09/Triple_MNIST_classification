@@ -5,6 +5,7 @@ import joblib
 import Builder as bm
 import pre_processing as pp
 import visualise as vs
+from visualise import plot_hyperparameter_tuning
 
 devices = tf.config.list_physical_devices()
 print(f"Total available devices: {devices}")
@@ -27,22 +28,19 @@ tf.config.set_soft_device_placement(True)
 
 
 def main():
-    """
-    Main script for Task 2: Benchmark comparison between Logistic Regression and CNN.
-    Includes hyperparameter tuning, model training, evaluation, and visualization.
-    """
+
     # Configuration
     img_size = (84, 84)
     batch_size = 128
     epochs = 10
 
     # For testing/debugging, set to True to use subset of data
-    USE_SUBSET = False  # Set to True for quick testing (~15 min vs 1-2 hours)
+    USE_SUBSET = True  # Set to True for quick testing (~15 min vs 1-2 hours)
     SUBSET_SIZE = 5000
 
-    print("=" * 60)
-    print("TASK 2: Model Benchmarking (Logistic Regression vs CNN)")
-    print("=" * 60)
+
+    print(" Model Benchmarking (Logistic Regression vs CNN)")
+
 
     # 1. Load and prepare datasets
     print("\n[1/5] Loading datasets...")
@@ -57,15 +55,7 @@ def main():
 
     # Optional: Use subset for faster testing/debugging
     if USE_SUBSET:
-        print(f"\n{'=' * 60}")
-        print(f"⚠️  WARNING: DEBUG MODE ACTIVE")
-        print(f"{'=' * 60}")
-        print(f"Using only {SUBSET_SIZE} samples for quick testing.")
-        print(f"Results will be POOR because:")
-        print(f"  - Very few samples per class")
-        print(f"  - Test set may have unseen classes")
-        print(f"Set USE_SUBSET=False for real training!")
-        print(f"{'=' * 60}\n")
+        print(f"DEBUG MODE ACTIVE")
         X_train = X_train[:SUBSET_SIZE]
         y_train = y_train[:SUBSET_SIZE]
         X_val = X_val[:SUBSET_SIZE // 4]
@@ -74,26 +64,10 @@ def main():
         y_test = y_test[:SUBSET_SIZE // 4]
 
     # Determine number of classes from the data
-    num_classes = len(np.unique(y_train))
-    train_classes = set(y_train)
-    test_classes = set(y_test)
-    unseen_classes = test_classes - train_classes
-
-    print(f"Training samples: {len(X_train)}")
-    print(f"Validation samples: {len(X_val)}")
-    print(f"Test samples: {len(X_test)}")
-    print(f"Number of classes in training: {num_classes}")
-    print(f"Number of classes in test: {len(test_classes)}")
-
-    if unseen_classes:
-        print(f"\n⚠️  WARNING: Test set contains {len(unseen_classes)} classes not in training!")
-        print(f"These classes will have 0% accuracy.")
-        if USE_SUBSET:
-            print(f"This is expected in DEBUG mode. Turn off USE_SUBSET for full dataset.")
+    num_classes = 1000
 
     # 2. Hyperparameter tuning for Logistic Regression
     print("\n[2/5] Tuning Logistic Regression hyperparameters...")
-    print("NOTE: This may take 10-20 minutes depending on dataset size...")
     lr_tune = []
     for c in [0.1, 1.0]:
         print(f"  Testing C={c}...")
@@ -107,7 +81,7 @@ def main():
     # 3. Hyperparameter tuning for CNN
     print("\n[3/5] Tuning CNN hyperparameters...")
     cnn_tune = []
-    for lr_rate in [1e-3, 1e-4]:
+    for lr_rate in [1e-3, 5e-4, 1e-4]:
         print(f"  Testing learning rate={lr_rate}...")
         model = bm.create_cnn_model(img_size, num_classes)
         model.compile(
@@ -159,11 +133,10 @@ def main():
         index=['Logistic Regression', 'Standard CNN']
     )
 
-    print("\n" + "=" * 60)
     print("RESULTS SUMMARY")
-    print("=" * 60)
+
     print(df_results.to_string())
-    print("=" * 60)
+
 
     # Save the best model
     print("\n[5/5] Saving best model...")
@@ -180,8 +153,8 @@ def main():
     print("\nGenerating visualizations...")
     cnn_preds = np.argmax(final_cnn.predict(X_test, verbose=0), axis=1)
     vs.plot_benchmark_results(df_results, res_cnn['history'], lr_tune, y_test, cnn_preds)
+    vs,plot_hyperparameter_tuning(lr_tune, cnn_tune)
 
-    print("\nTask 2 completed successfully!")
 
 
 if __name__ == "__main__":

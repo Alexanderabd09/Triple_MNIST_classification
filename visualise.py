@@ -343,254 +343,87 @@ def plot_task5_multilabel_results(results_multilabel, baseline_history=None):
     print("✓ Visualization saved as 'task5_multilabel_results.png'")
     plt.show()
 
+
+def plot_hyperparameter_tuning(lr_tune, cnn_tune, save_path='hyperparameter_tuning.png'):
     """
-    Creates a comprehensive visualization comparing Logistic Regression and CNN.
+    Creates comparison bar charts for hyperparameter tuning results.
+    Used for TASK 2 to visualize C tuning for Logistic Regression and
+    learning rate tuning for CNN.
 
     Args:
-        df: DataFrame containing model comparison metrics
-        cnn_history: Training history from CNN model (must include 'loss' and 'val_loss')
-        lr_tuning_history: List of dicts with hyperparameter tuning results
-        y_true: True labels for confusion matrix (1000 classes)
-        y_pred: Predicted labels for confusion matrix (1000 classes)
+        lr_tune: List of dicts with LR tuning results, e.g.,
+                 [{'param': 0.1, 'val_accuracy': 0.85}, {'param': 1.0, 'val_accuracy': 0.87}]
+        cnn_tune: List of dicts with CNN tuning results, e.g.,
+                  [{'param': 1e-3, 'val_accuracy': 0.90}, {'param': 1e-4, 'val_accuracy': 0.88}]
+        save_path: Path to save the visualization
     """
-    fig = plt.figure(figsize=(20, 12))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-    # 1. Loss Curves (CNN only - LR doesn't have epoch-wise loss)
-    if cnn_history and 'loss' in cnn_history:
-        ax1 = plt.subplot(2, 3, 1)
-        epochs = range(1, len(cnn_history['loss']) + 1)
-        ax1.plot(epochs, cnn_history['loss'], 'b-o', label='Training Loss', linewidth=2)
-        ax1.plot(epochs, cnn_history['val_loss'], 'r-s', label='Validation Loss', linewidth=2)
-        ax1.set_xlabel('Epoch', fontsize=11)
-        ax1.set_ylabel('Loss', fontsize=11)
-        ax1.set_title('CNN Loss Curves', fontsize=13, weight='bold')
-        ax1.legend(loc='upper right')
-        ax1.grid(True, alpha=0.3)
+    # 1. Logistic Regression C Parameter Tuning
+    ax1 = axes[0]
+    c_values = [str(item['param']) for item in lr_tune]
+    c_accuracies = [item['val_accuracy'] for item in lr_tune]
 
-    # 2. Accuracy Comparison
-    ax2 = plt.subplot(2, 3, 2)
-    models = df.index.tolist()
-    accuracies = df['accuracy'].tolist()
-    colors = ['skyblue', 'lightcoral']
-    bars = ax2.bar(models, accuracies, color=colors, edgecolor='navy', alpha=0.7)
-    ax2.set_ylabel('Accuracy', fontsize=11)
-    ax2.set_title('Model Accuracy Comparison', fontsize=13, weight='bold')
+    colors_lr = ['#3498db' if acc == max(c_accuracies) else '#85c1e9' for acc in c_accuracies]
+    bars1 = ax1.bar(c_values, c_accuracies, color=colors_lr, edgecolor='navy', alpha=0.8)
+
+    ax1.set_xlabel('C Parameter (Regularization Strength)', fontsize=12)
+    ax1.set_ylabel('Validation Accuracy', fontsize=12)
+    ax1.set_title('Logistic Regression: C Parameter Tuning', fontsize=14, weight='bold')
+    ax1.set_ylim([0, 1])
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Add value labels on bars
+    for bar in bars1:
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom', fontsize=10, weight='bold')
+
+    # Highlight best parameter
+    best_c_idx = c_accuracies.index(max(c_accuracies))
+    ax1.annotate('Best', xy=(best_c_idx, c_accuracies[best_c_idx]),
+                 xytext=(best_c_idx, c_accuracies[best_c_idx] + 0.05),
+                 ha='center', fontsize=10, color='green', weight='bold',
+                 arrowprops=dict(arrowstyle='->', color='green'))
+
+    # 2. CNN Learning Rate Tuning
+    ax2 = axes[1]
+    lr_values = [f'{item["param"]:.0e}' for item in cnn_tune]
+    lr_accuracies = [item['val_accuracy'] for item in cnn_tune]
+
+    colors_cnn = ['#e74c3c' if acc == max(lr_accuracies) else '#f1948a' for acc in lr_accuracies]
+    bars2 = ax2.bar(lr_values, lr_accuracies, color=colors_cnn, edgecolor='darkred', alpha=0.8)
+
+    ax2.set_xlabel('Learning Rate', fontsize=12)
+    ax2.set_ylabel('Validation Accuracy', fontsize=12)
+    ax2.set_title('CNN: Learning Rate Tuning', fontsize=14, weight='bold')
     ax2.set_ylim([0, 1])
     ax2.grid(axis='y', alpha=0.3)
-    for bar in bars:
+
+    # Add value labels on bars
+    for bar in bars2:
         height = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width() / 2., height,
-                 f'{height:.4f}', ha='center', va='bottom', fontsize=10)
+        ax2.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
+                 f'{height:.4f}', ha='center', va='bottom', fontsize=10, weight='bold')
 
-    # 3. F1 Score Comparison
-    ax3 = plt.subplot(2, 3, 3)
-    f1_scores = df['f1_score'].tolist()
-    bars = ax3.bar(models, f1_scores, color=colors, edgecolor='darkred', alpha=0.7)
-    ax3.set_ylabel('F1 Score', fontsize=11)
-    ax3.set_title('Model F1 Score Comparison', fontsize=13, weight='bold')
-    ax3.set_ylim([0, 1])
-    ax3.grid(axis='y', alpha=0.3)
-    for bar in bars:
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width() / 2., height,
-                 f'{height:.4f}', ha='center', va='bottom', fontsize=10)
+    # Highlight best parameter
+    best_lr_idx = lr_accuracies.index(max(lr_accuracies))
+    ax2.annotate('Best', xy=(best_lr_idx, lr_accuracies[best_lr_idx]),
+                 xytext=(best_lr_idx, lr_accuracies[best_lr_idx] + 0.05),
+                 ha='center', fontsize=10, color='green', weight='bold',
+                 arrowprops=dict(arrowstyle='->', color='green'))
 
-    # 4. CNN Training Progress (Accuracy)
-    if cnn_history:
-        ax4 = plt.subplot(2, 3, 4)
-        epochs = range(1, len(cnn_history['accuracy']) + 1)
-        ax4.plot(epochs, cnn_history['accuracy'], 'b-o', label='Training Accuracy', linewidth=2)
-        ax4.plot(epochs, cnn_history['val_accuracy'], 'r-s', label='Validation Accuracy', linewidth=2)
-        ax4.set_xlabel('Epoch', fontsize=11)
-        ax4.set_ylabel('Accuracy', fontsize=11)
-        ax4.set_title('CNN Accuracy Curves', fontsize=13, weight='bold')
-        ax4.legend(loc='lower right')
-        ax4.grid(True, alpha=0.3)
-
-    # 5. Full 1000x1000 Confusion Matrix Heatmap
-    if y_true is not None and y_pred is not None:
-        ax5 = plt.subplot(2, 3, 5)
-        cm = confusion_matrix(y_true, y_pred)
-
-        # Use a more appropriate colormap for large matrices
-        im = ax5.imshow(cm, cmap='Blues', interpolation='nearest', aspect='auto')
-        plt.colorbar(im, ax=ax5, fraction=0.046, pad=0.04)
-
-        ax5.set_xlabel('Predicted Label', fontsize=11)
-        ax5.set_ylabel('True Label', fontsize=11)
-        ax5.set_title('Confusion Matrix (1000x1000)', fontsize=13, weight='bold')
-
-        # Add tick marks at intervals for readability
-        tick_interval = 100
-        tick_positions = np.arange(0, 1000, tick_interval)
-        ax5.set_xticks(tick_positions)
-        ax5.set_yticks(tick_positions)
-        ax5.set_xticklabels(tick_positions, fontsize=8)
-        ax5.set_yticklabels(tick_positions, fontsize=8)
-
-    # 6. Results Table
-    ax6 = plt.subplot(2, 3, 6)
-    ax6.axis('off')
-
-    # Select only numeric columns for the table
-    numeric_cols = ['accuracy', 'f1_score', 'training_time']
-    df_display = df[numeric_cols].copy()
-
-    # Format the data for display
-    table_data = []
-    for idx in df_display.index:
-        row_data = []
-        for col in df_display.columns:
-            val = df_display.loc[idx, col]
-            if col == 'training_time':
-                row_data.append(f'{val:.2f}s')
-            else:
-                row_data.append(f'{val:.4f}')
-        table_data.append(row_data)
-
-    table = ax6.table(
-        cellText=table_data,
-        colLabels=df_display.columns,
-        rowLabels=df_display.index,
-        loc='center',
-        cellLoc='center'
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1, 2.5)
-
-    for i in range(len(df_display.columns)):
-        table[(0, i)].set_facecolor('#4CAF50')
-        table[(0, i)].set_text_props(weight='bold', color='white')
-
-    for i in range(len(df_display.index)):
-        table[(i + 1, -1)].set_facecolor('#E8E8E8')
-        table[(i + 1, -1)].set_text_props(weight='bold')
-
-    ax6.set_title('Detailed Model Comparison', pad=20, fontsize=13, weight='bold')
+    # Add overall title
+    fig.suptitle('Hyperparameter Tuning Comparison', fontsize=16, weight='bold', y=1.02)
 
     plt.tight_layout()
-    plt.savefig('benchmark_results.png', dpi=300, bbox_inches='tight')
-    print("Visualization saved as 'benchmark_results.png'")
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Visualization saved as '{save_path}'")
     plt.show()
 
-
-def plot_split_model_comparison(results_split, res_baseline, baseline_history, y_true_split, y_pred_split,
-                                y_true_baseline, y_pred_baseline):
-    """
-    Creates comprehensive comparison visualizations between baseline and split models.
-
-    Args:
-        results_split: Results dictionary from split model
-        res_baseline: Results dictionary from baseline model
-        baseline_history: Training history from baseline model
-        y_true_split: True labels from split model
-        y_pred_split: Predicted labels from split model
-        y_true_baseline: True labels from baseline model
-        y_pred_baseline: Predicted labels from baseline model
-    """
-    fig = plt.figure(figsize=(20, 12))
-
-    # 1. Loss Curves Comparison
-    ax1 = plt.subplot(2, 3, 1)
-
-    if baseline_history and 'loss' in baseline_history:
-        epochs_baseline = range(1, len(baseline_history['loss']) + 1)
-        ax1.plot(epochs_baseline, baseline_history['loss'], 'b-o', label='Baseline Train Loss', linewidth=2)
-        ax1.plot(epochs_baseline, baseline_history['val_loss'], 'b--s', label='Baseline Val Loss', linewidth=2,
-                 alpha=0.7)
-
-    if 'history' in results_split and 'loss' in results_split['history']:
-        # Split model has combined loss
-        history_split = results_split['history']
-        epochs_split = range(1, len(history_split['loss']) + 1)
-        ax1.plot(epochs_split, history_split['loss'], 'r-o', label='Split Train Loss', linewidth=2)
-        ax1.plot(epochs_split, history_split['val_loss'], 'r--s', label='Split Val Loss', linewidth=2, alpha=0.7)
-
-    ax1.set_xlabel('Epoch', fontsize=11)
-    ax1.set_ylabel('Loss', fontsize=11)
-    ax1.set_title('Loss Curves Comparison', fontsize=13, weight='bold')
-    ax1.legend(loc='upper right', fontsize=9)
-    ax1.grid(True, alpha=0.3)
-
-    # 2. Accuracy Comparison
-    ax2 = plt.subplot(2, 3, 2)
-    models = ['Baseline CNN', 'Split CNN']
-    accuracies = [res_baseline['accuracy'], results_split['accuracy']]
-    colors = ['skyblue', 'lightcoral']
-    bars = ax2.bar(models, accuracies, color=colors, edgecolor='navy', alpha=0.7)
-    ax2.set_ylabel('Accuracy', fontsize=11)
-    ax2.set_title('Model Accuracy Comparison', fontsize=13, weight='bold')
-    ax2.set_ylim([0, 1])
-    ax2.grid(axis='y', alpha=0.3)
-    for bar in bars:
-        height = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width() / 2., height,
-                 f'{height:.4f}', ha='center', va='bottom', fontsize=10)
-
-    # 3. F1 Score Comparison
-    ax3 = plt.subplot(2, 3, 3)
-    f1_scores = [res_baseline['f1_score'], results_split['f1_score']]
-    bars = ax3.bar(models, f1_scores, color=colors, edgecolor='darkred', alpha=0.7)
-    ax3.set_ylabel('F1 Score', fontsize=11)
-    ax3.set_title('Model F1 Score Comparison', fontsize=13, weight='bold')
-    ax3.set_ylim([0, 1])
-    ax3.grid(axis='y', alpha=0.3)
-    for bar in bars:
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width() / 2., height,
-                 f'{height:.4f}', ha='center', va='bottom', fontsize=10)
-
-    # 4. Baseline Model Confusion Matrix
-    ax4 = plt.subplot(2, 3, 4)
-    cm_baseline = confusion_matrix(y_true_baseline, y_pred_baseline)
-    im4 = ax4.imshow(cm_baseline, cmap='Blues', interpolation='nearest', aspect='auto')
-    plt.colorbar(im4, ax=ax4, fraction=0.046, pad=0.04)
-    ax4.set_xlabel('Predicted Label', fontsize=11)
-    ax4.set_ylabel('True Label', fontsize=11)
-    ax4.set_title('Baseline CNN Confusion Matrix (1000x1000)', fontsize=13, weight='bold')
-    tick_interval = 100
-    tick_positions = np.arange(0, 1000, tick_interval)
-    ax4.set_xticks(tick_positions)
-    ax4.set_yticks(tick_positions)
-    ax4.set_xticklabels(tick_positions, fontsize=8)
-    ax4.set_yticklabels(tick_positions, fontsize=8)
-
-    # 5. Split Model Confusion Matrix
-    ax5 = plt.subplot(2, 3, 5)
-    cm_split = confusion_matrix(y_true_split, y_pred_split)
-    im5 = ax5.imshow(cm_split, cmap='Reds', interpolation='nearest', aspect='auto')
-    plt.colorbar(im5, ax=ax5, fraction=0.046, pad=0.04)
-    ax5.set_xlabel('Predicted Label', fontsize=11)
-    ax5.set_ylabel('True Label', fontsize=11)
-    ax5.set_title('Split CNN Confusion Matrix (1000x1000)', fontsize=13, weight='bold')
-    ax5.set_xticks(tick_positions)
-    ax5.set_yticks(tick_positions)
-    ax5.set_xticklabels(tick_positions, fontsize=8)
-    ax5.set_yticklabels(tick_positions, fontsize=8)
-
-    # 6. Split Model Per-Digit Accuracy
-    if 'history' in results_split:
-        ax6 = plt.subplot(2, 3, 6)
-        history = results_split['history']
-        epochs = range(1, len(history['out_1_accuracy']) + 1)
-
-        ax6.plot(epochs, history['out_1_accuracy'], 'b-o', label='Digit 1 (Train)', linewidth=2)
-        ax6.plot(epochs, history['out_2_accuracy'], 'g-s', label='Digit 2 (Train)', linewidth=2)
-        ax6.plot(epochs, history['out_3_accuracy'], 'r-^', label='Digit 3 (Train)', linewidth=2)
-
-        if 'val_out_1_accuracy' in history:
-            ax6.plot(epochs, history['val_out_1_accuracy'], 'b--', label='Digit 1 (Val)', linewidth=2, alpha=0.6)
-            ax6.plot(epochs, history['val_out_2_accuracy'], 'g--', label='Digit 2 (Val)', linewidth=2, alpha=0.6)
-            ax6.plot(epochs, history['val_out_3_accuracy'], 'r--', label='Digit 3 (Val)', linewidth=2, alpha=0.6)
-
-        ax6.set_xlabel('Epoch', fontsize=11)
-        ax6.set_ylabel('Accuracy', fontsize=11)
-        ax6.set_title('Split Model: Per-Digit Accuracy', fontsize=13, weight='bold')
-        ax6.legend(loc='lower right', fontsize=8, ncol=2)
-        ax6.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig('split_model_comparison.png', dpi=300, bbox_inches='tight')
-    print("Visualization saved as 'split_model_comparison.png'")
-    plt.show()
+    # Print summary
+    best_c = lr_tune[best_c_idx]['param']
+    best_lr = cnn_tune[best_lr_idx]['param']
+    print(f"\nBest Hyperparameters:")
+    print(f"  Logistic Regression C: {best_c} (accuracy: {max(c_accuracies):.4f})")
+    print(f"  CNN Learning Rate: {best_lr} (accuracy: {max(lr_accuracies):.4f})")

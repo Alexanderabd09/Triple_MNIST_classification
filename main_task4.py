@@ -38,6 +38,10 @@ def main():
     BATCH_SIZE = 128
     EPOCHS = 15
 
+    # For testing/debugging, set to True to use subset of data
+    USE_SUBSET = False  # Set to True for quick testing (~15 min vs 1-2 hours)
+    SUBSET_SIZE = 5000
+
     # For testing/debugging, set to True to use fewer epochs
     QUICK_TEST = False  # Set to True for quick testing (5 epochs instead of 15)
     if QUICK_TEST:
@@ -109,6 +113,7 @@ def main():
         print("  Continuing with split model training only...")
 
     # 1. Load datasets with split=True for multi-output format
+    # 1. Load datasets with split=True for multi-output format
     print("\n[1/3] Loading datasets for split model...")
     print("Each 84x84 image will be split into three 84x28 strips (left, middle, right)")
 
@@ -121,7 +126,90 @@ def main():
     test_ds_split = pp.prepare_dataset(
         "triple_mnist/test/", IMG_SIZE, BATCH_SIZE, split=True
     )
+
+    # Extract data from datasets (needed for hyperparameter tuning)
+    X_train, y1_train, y2_train, y3_train = bm.extract_split_dataset(train_ds_split)
+    X_val, y1_val, y2_val, y3_val = bm.extract_split_dataset(val_ds_split)
+    X_test, y1_test, y2_test, y3_test = bm.extract_split_dataset(test_ds_split)
+
+    # Helper function to create dataset for split format
+    def create_split_dataset(images, labels_dict, batch_size):
+        """Create a tf.data.Dataset from numpy arrays in split format."""
+        dataset = tf.data.Dataset.from_tensor_slices((
+            {"img_in": images},
+            labels_dict
+        ))
+        return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+    # Optional: Use subset for faster testing/debugging
+    if USE_SUBSET:
+        print(f"WARNING: DEBUG MODE ACTIVE")
+
+        # Subset the data
+        X_train = X_train[:SUBSET_SIZE]
+        y1_train, y2_train, y3_train = y1_train[:SUBSET_SIZE], y2_train[:SUBSET_SIZE], y3_train[:SUBSET_SIZE]
+
+        X_val = X_val[:SUBSET_SIZE // 4]
+        y1_val, y2_val, y3_val = y1_val[:SUBSET_SIZE // 4], y2_val[:SUBSET_SIZE // 4], y3_val[:SUBSET_SIZE // 4]
+
+        X_test = X_test[:SUBSET_SIZE // 4]
+        y1_test, y2_test, y3_test = y1_test[:SUBSET_SIZE // 4], y2_test[:SUBSET_SIZE // 4], y3_test[:SUBSET_SIZE // 4]
+
+        print(f"Training samples: {len(X_train)}")
+        print(f"Validation samples: {len(X_val)}")
+        print(f"Test samples: {len(X_test)}")
+
+    # Recreate datasets from (possibly subsetted) numpy arrays
+    train_ds_split = create_split_dataset(
+        X_train, {"out_1": y1_train, "out_2": y2_train, "out_3": y3_train}, BATCH_SIZE
+    )
+    val_ds_split = create_split_dataset(
+        X_val, {"out_1": y1_val, "out_2": y2_val, "out_3": y3_val}, BATCH_SIZE
+    )
+    test_ds_split = create_split_dataset(
+        X_test, {"out_1": y1_test, "out_2": y2_test, "out_3": y3_test}, BATCH_SIZE
+    )
+
     print("Datasets loaded and formatted for split model.")
+    print(f"Training samples: {len(X_train)}")
+    print(f"Validation samples: {len(X_val)}")
+    print(f"Test samples: {len(X_test)}")
+
+
+    print("Datasets loaded and formatted for split model.")
+
+    print("\n[3/5] Tuning CNN hyperparameters...")
+
+    cnn_tune = []
+    for lr_rate in [1e-3, 5e-4, 1e-4]:
+        # Use the already extracted numpy arrays, not the dataset
+        # X_train, y1_train, y2_train, y3_train are already available from above
+        print(f"  Testing learning rate={lr_rate}...")
+        model = bm.build_dual_path_cnn(num_classes=10, learning_rate=lr_rate)
+
+        # For the split model, you need to use the multi-output format
+        h = model.fit(
+            {"img_in": X_train},
+            {"out_1": y1_train, "out_2": y2_train, "out_3": y3_train},
+            validation_data=(
+                {"img_in": X_val},
+                {"out_1": y1_val, "out_2": y2_val, "out_3": y3_val}
+            ),
+            epochs=2,
+            batch_size=BATCH_SIZE,
+            verbose=0
+        )
+        # Get average accuracy across all 3 outputs
+        val_acc = np.mean([
+            h.history.get('out_1_accuracy', h.history.get('val_out_1_accuracy', [0]))[-1],
+            h.history.get('out_2_accuracy', h.history.get('val_out_2_accuracy', [0]))[-1],
+            h.history.get('out_3_accuracy', h.history.get('val_out_3_accuracy', [0]))[-1]
+        ])
+        cnn_tune.append({'param': lr_rate, 'val_accuracy': val_acc})
+        print(f"    Validation Accuracy: {val_acc:.4f}")
+
+    best_lr = max(cnn_tune, key=lambda x: x['val_accuracy'])['param']
+    print(f"  Best learning rate: {best_lr}")
 
     # 2. Build and train the split/Siamese CNN model
     print("\n[2/3] Building and training Split CNN model...")
