@@ -28,29 +28,25 @@ tf.config.set_soft_device_placement(True)
 
 
 def main():
-    """
-    Main script for Task 4: Split/Siamese CNN implementation.
-    Splits each 84x84 image into three 84x28 strips (one per digit).
-    Trains a shared CNN to predict each digit independently.
-    """
+
     # Configuration
     IMG_SIZE = (84, 84)
     BATCH_SIZE = 128
     EPOCHS = 15
 
     # For testing/debugging, set to True to use subset of data
-    USE_SUBSET = False  # Set to True for quick testing (~15 min vs 1-2 hours)
+    USE_SUBSET = False  # Set to True for quick testing
     SUBSET_SIZE = 5000
 
     # For testing/debugging, set to True to use fewer epochs
     QUICK_TEST = False  # Set to True for quick testing (5 epochs instead of 15)
     if QUICK_TEST:
         EPOCHS = 5
-        print("\n⚠️  QUICK TEST MODE: Using only 5 epochs")
+        print("\nQUICK TEST MODE: Using only 5 epochs")
 
-    print("=" * 60)
+
     print("TASK 4: Split/Siamese CNN Architecture")
-    print("=" * 60)
+
 
     # Try to load baseline model from Task 2 for comparison
     res_baseline = None
@@ -112,10 +108,10 @@ def main():
         print("  Run main_task2.py first to enable full comparison.")
         print("  Continuing with split model training only...")
 
+
     # 1. Load datasets with split=True for multi-output format
-    # 1. Load datasets with split=True for multi-output format
-    print("\n[1/3] Loading datasets for split model...")
-    print("Each 84x84 image will be split into three 84x28 strips (left, middle, right)")
+    print("\nLoading datasets for split model...")
+
 
     train_ds_split = pp.prepare_dataset(
         "triple_mnist/train/", IMG_SIZE, BATCH_SIZE, split=True
@@ -141,7 +137,7 @@ def main():
         ))
         return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
-    # Optional: Use subset for faster testing/debugging
+    # Use subset for faster testing/debugging
     if USE_SUBSET:
         print(f"WARNING: DEBUG MODE ACTIVE")
 
@@ -178,16 +174,15 @@ def main():
 
     print("Datasets loaded and formatted for split model.")
 
-    print("\n[3/5] Tuning CNN hyperparameters...")
+    print("\n Tuning CNN hyperparameters...")
 
     cnn_tune = []
     for lr_rate in [1e-3, 5e-4, 1e-4]:
-        # Use the already extracted numpy arrays, not the dataset
-        # X_train, y1_train, y2_train, y3_train are already available from above
+        # Using the already extracted numpy arrays
         print(f"  Testing learning rate={lr_rate}...")
         model = bm.build_dual_path_cnn(num_classes=10, learning_rate=lr_rate)
 
-        # For the split model, you need to use the multi-output format
+
         h = model.fit(
             {"img_in": X_train},
             {"out_1": y1_train, "out_2": y2_train, "out_3": y3_train},
@@ -212,8 +207,8 @@ def main():
     print(f"  Best learning rate: {best_lr}")
 
     # 2. Build and train the split/Siamese CNN model
-    print("\n[2/3] Building and training Split CNN model...")
-    print("Architecture: Siamese network with shared weights for each digit strip")
+    print("\nBuilding and training Split CNN model...")
+
     split_model = bm.build_dual_path_cnn(num_classes=10, learning_rate=0.001)
 
     print("\nModel Summary:")
@@ -225,39 +220,38 @@ def main():
         split_model, train_ds_split, val_ds_split, test_ds_split, EPOCHS
     )
 
-    print("\n" + "=" * 60)
+
     print("SPLIT MODEL RESULTS")
-    print("=" * 60)
+
     print(f"Test Accuracy (3-digit combination): {results_split['accuracy']:.4f}")
     print(f"Test F1 Score (macro): {results_split['f1_score']:.4f}")
     print(f"Training Time: {results_split['training_time']:.2f}s")
-    print("=" * 60)
+
 
     # 3. Compare with baseline if available
     if res_baseline:
-        print("\n" + "=" * 60)
+
         print("MODEL COMPARISON (Task 2 vs Task 4)")
-        print("=" * 60)
+
         comparison_df = pd.DataFrame(
             [res_baseline, results_split],
             index=['Task 2: Standard CNN', 'Task 4: Split CNN']
         )
         print(comparison_df.to_string())
-        print("=" * 60)
+
 
         improvement = (results_split['accuracy'] - res_baseline['accuracy']) * 100
         if improvement > 0:
-            print(f"\n✓ Split CNN improved accuracy by {improvement:.2f} percentage points")
+            print(f"\nSplit CNN improved accuracy by {improvement:.2f} percentage points")
         elif improvement < 0:
-            print(f"\n✗ Split CNN decreased accuracy by {abs(improvement):.2f} percentage points")
+            print(f"\nSplit CNN decreased accuracy by {abs(improvement):.2f} percentage points")
         else:
-            print(f"\n= Both models achieved the same accuracy")
+            print(f"\nBoth models achieved the same accuracy")
 
-        print("\nKey Insight: The split approach treats each digit independently,")
-        print("which can be more efficient than predicting all 1000 combinations directly.")
+
 
     # Save the split model
-    print("\n[3/3] Saving split model...")
+    print("\nSaving split model...")
     split_model.save('best_split_model.keras')
     print("Saved: best_split_model.keras")
 

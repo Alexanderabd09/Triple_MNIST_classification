@@ -1,7 +1,4 @@
-"""
-Builder.py - All model architectures and training functions
-Contains models and utilities for Tasks 2, 4, and 5
-"""
+
 
 import time
 import tensorflow as tf
@@ -12,13 +9,24 @@ from sklearn.metrics import f1_score, accuracy_score, confusion_matrix
 from sklearn.linear_model import LogisticRegression
 import os
 
-# REMOVED: from main_task5 import BATCH_SIZE  # Circular import
 
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
+# Helper Functions
 
+
+class AccuracyThresholdCallback(tf.keras.callbacks.Callback):
+    def __init__(self, threshold=0.95):
+        super().__init__()
+        self.threshold = threshold
+
+    def on_epoch_end(self, epoch, logs=None):
+        acc1 = logs.get('val_out_1_accuracy', 0)
+        acc2 = logs.get('val_out_2_accuracy', 0)
+        acc3 = logs.get('val_out_3_accuracy', 0)
+
+        if acc1 >= self.threshold and acc2 >= self.threshold and acc3 >= self.threshold:
+            print(f"\nReached {self.threshold * 100}% accuracy on all heads. Stopping training!")
+            self.model.stop_training = True
 def extract_split_dataset(dataset):
     """
     Extract images and labels from a split dataset.
@@ -45,9 +53,9 @@ def extract_split_dataset(dataset):
     return X, y1, y2, y3
 
 
-# ============================================================================
-# TASK 2: BASELINE MODELS
-# ============================================================================
+
+# TASK 2: Baseline Models
+
 
 def create_cnn_model(img_size, num_classes):
     augmentation = tf.keras.Sequential([
@@ -114,24 +122,7 @@ def run_benchmark_cnn(model, X_train, X_test, y_train, y_test, X_val, y_val, epo
     }
 
 
-# ============================================================================
-# TASK 4: SPLIT CNN
-# ============================================================================
-
-class AccuracyThresholdCallback(tf.keras.callbacks.Callback):
-    def __init__(self, threshold=0.95):
-        super().__init__()
-        self.threshold = threshold
-
-    def on_epoch_end(self, epoch, logs=None):
-        acc1 = logs.get('val_out_1_accuracy', 0)
-        acc2 = logs.get('val_out_2_accuracy', 0)
-        acc3 = logs.get('val_out_3_accuracy', 0)
-
-        if acc1 >= self.threshold and acc2 >= self.threshold and acc3 >= self.threshold:
-            print(f"\nReached {self.threshold * 100}% accuracy on all heads. Stopping training!")
-            self.model.stop_training = True
-
+# TASK 4: Split CNN
 
 def build_dual_path_cnn(num_classes=10, learning_rate=0.001):
     img_in = layers.Input(shape=(84, 84, 1), name='img_in')
@@ -233,9 +224,8 @@ def run_benchmark_split_cnn(model, train_ds, val_ds, test_ds, epochs):
     }, y_true, y_pred
 
 
-# ============================================================================
-# TASK 5A: MULTI-LABEL CNN
-# ============================================================================
+
+# TASK 5A: Multi-label CNN
 
 def build_multilabel_cnn(input_shape=(84, 84, 1)):
     inputs = layers.Input(shape=input_shape, name='img_in')
@@ -287,7 +277,6 @@ def build_multilabel_cnn(input_shape=(84, 84, 1)):
 def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15, quick_test=False, batch_size=128):
     """
     Train multi-label CNN for Task 5.
-    FIXED: Now properly uses extracted numpy arrays for training.
     """
     print("Extracting data from datasets...")
     X_train, y1_train, y2_train, y3_train = extract_split_dataset(train_ds)
@@ -298,7 +287,6 @@ def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15, quick_test=False,
     print(f"  Val:   {len(X_val)} samples")
     print(f"  Test:  {len(X_test)} samples")
 
-    # Optional subset for quick testing
     if quick_test:
         subset_train = min(20000, len(X_train))
         subset_val = min(4000, len(X_val))
@@ -314,6 +302,8 @@ def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15, quick_test=False,
         print(f"  Quick test subset: {subset_train} train, {subset_val} val")
 
     model = build_multilabel_cnn()
+
+    accuracyThreshold = AccuracyThresholdCallback(0.89)
 
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor='val_out_1_accuracy',
@@ -333,7 +323,6 @@ def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15, quick_test=False,
 
     start_time = time.time()
 
-    # FIXED: Train on extracted numpy arrays, not the dataset
     history = model.fit(
         {'img_in': X_train},
         {'out_1': y1_train, 'out_2': y2_train, 'out_3': y3_train},
@@ -343,13 +332,12 @@ def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15, quick_test=False,
         ),
         epochs=epochs,
         batch_size=batch_size,
-        callbacks=[early_stop, reduce_lr],
+        callbacks=[early_stop, reduce_lr,accuracyThreshold ],
         verbose=1
     )
 
     training_time = time.time() - start_time
 
-    # Evaluation
     print("\nEvaluating on test set...")
     preds = model.predict({'img_in': X_test}, verbose=0)
     p1 = np.argmax(preds[0], axis=1)
@@ -374,104 +362,208 @@ def train_multilabel_cnn(train_ds, val_ds, test_ds, epochs=15, quick_test=False,
         'accuracy': accuracy,
         'f1_score': f1,
         'per_digit_accuracy': [acc1, acc2, acc3],
-        'training_time': training_time
+        'training_time': training_time,
+        'y_true': y_true_combined,
+        'y_pred': y_pred_combined
     }
 
 
-# ============================================================================
-# TASK 5B: GAN (DCGAN)
-# ============================================================================
+
+# TASK 5B: GAN early stopping
+
+
+class GANEarlyStopping:
+    """
+    Early stopping for GAN training based on multiple criteria.
+
+    Criteria:
+    1. Discriminator accuracy reaches target threshold (balanced training)
+    2. Mode collapse detected (low diversity)
+    3. Loss ratio becomes too imbalanced
+
+    """
+
+    def __init__(self,
+                 d_acc_threshold=0.5,
+                 d_acc_tolerance=0.1,
+                 d_acc_patience=10,
+                 diversity_threshold=10.0,
+                 diversity_patience=5,
+                 loss_ratio_threshold=10.0,
+                 verbose=True):
+
+        self.d_acc_threshold = d_acc_threshold
+        self.d_acc_tolerance = d_acc_tolerance
+        self.d_acc_patience = d_acc_patience
+        self.diversity_threshold = diversity_threshold
+        self.diversity_patience = diversity_patience
+        self.loss_ratio_threshold = loss_ratio_threshold
+        self.verbose = verbose
+
+        # Counters
+        self.acc_counter = 0
+        self.diversity_counter = 0
+        self.stop_reason = None
+        self.stopped = False
+
+    def should_stop(self, d_acc, d_loss, g_loss, diversity=None):
+        '''Check if training should stop'''
+        if self.stopped:
+            return True
+
+        # Check 1: Discriminator accuracy at target (GOOD - converged)
+        if abs(d_acc - self.d_acc_threshold) <= self.d_acc_tolerance:
+            self.acc_counter += 1
+            if self.acc_counter >= self.d_acc_patience:
+                self.stop_reason = (
+                    f"CONVERGED: D accuracy stable at {d_acc:.4f} "
+                    f"(target: {self.d_acc_threshold}±{self.d_acc_tolerance}) "
+                    f"for {self.d_acc_patience} epochs"
+                )
+                self.stopped = True
+                return True
+        else:
+            self.acc_counter = 0
+
+        # Check 2: Mode collapse (BAD - low diversity)
+        if diversity is not None and diversity < self.diversity_threshold:
+            self.diversity_counter += 1
+            if self.diversity_counter >= self.diversity_patience:
+                self.stop_reason = (
+                    f"MODE COLLAPSE: Diversity {diversity:.2f} below threshold "
+                    f"{self.diversity_threshold} for {self.diversity_patience} epochs"
+                )
+                self.stopped = True
+                return True
+        else:
+            self.diversity_counter = 0
+
+        # Check 3: Extremely imbalanced loss ratio (BAD)
+        if d_loss > 0:
+            loss_ratio = g_loss / (d_loss + 1e-8)
+            if loss_ratio > self.loss_ratio_threshold:
+                self.stop_reason = (
+                    f"IMBALANCED: G_loss/D_loss ratio {loss_ratio:.2f} "
+                    f"exceeds threshold {self.loss_ratio_threshold}"
+                )
+                self.stopped = True
+                return True
+
+        return False
+
+    def reset(self):
+        """Reset all counters."""
+        self.acc_counter = 0
+        self.diversity_counter = 0
+        self.stop_reason = None
+        self.stopped = False
+
+
+
+# TASK 5B: optimised DCGAN
+
 
 class DCGAN:
-    """
-    DCGAN that actually works for 84x84 Triple MNIST.
-    Key fixes:
-    1. Proper architecture sizing
-    2. Balanced learning rates
-    3. Gradient penalty for stability
-    4. No discriminator collapse
-    """
+
 
     def __init__(self, latent_dim=128, img_size=(84, 84)):
         self.latent_dim = latent_dim
+        self.latent_dim_tensor = tf.constant(latent_dim, dtype=tf.int32)
         self.img_size = img_size
 
         self.generator = self._build_generator()
         self.discriminator = self._build_discriminator()
 
-        # Key: Very low learning rates for stability
-        self.g_optimizer = tf.keras.optimizers.Adam(0.0001, beta_1=0.5, beta_2=0.9)
-        self.d_optimizer = tf.keras.optimizers.Adam(0.0001, beta_1=0.5, beta_2=0.9)
+        # Optimizers - lower LR for discriminator
+        self.g_optimizer = tf.keras.optimizers.Adam(
+            learning_rate=0.0002,
+            beta_1=0.5,
+            beta_2=0.999
+        )
+        self.d_optimizer = tf.keras.optimizers.Adam(
+            learning_rate=0.0001,
+            beta_1=0.5,
+            beta_2=0.999
+        )
 
-        self.loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+        self.bce = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+
+
+        self.fixed_noise = tf.random.normal([16, latent_dim])
+
+
+        self._train_step = tf.function(self._train_step_impl)
 
     def _build_generator(self):
         """
         Generator: latent vector → 84×84×1 image
-        Architecture: Dense → Reshape → 4 upsampling blocks
+        Architecture: 6→12→24→48→96 then crop to 84
         """
         model = models.Sequential(name='generator')
 
-        # Start: project and reshape to 7×7×512
-        # We'll upsample: 7 → 14 → 28 → 56 → 84 (with adjustment)
-        model.add(layers.Dense(7 * 7 * 512, use_bias=False, input_dim=self.latent_dim))
-        model.add(layers.BatchNormalization())
-        model.add(layers.ReLU())
-        model.add(layers.Reshape((7, 7, 512)))
+        # Project and reshape: latent_dim → 6×6×512
+        model.add(layers.Dense(6 * 6 * 512, use_bias=False, input_dim=self.latent_dim))
+        model.add(layers.BatchNormalization(momentum=0.8))
+        model.add(layers.LeakyReLU(0.2))
+        model.add(layers.Reshape((6, 6, 512)))
 
-        # 7×7 → 14×14
-        model.add(layers.Conv2DTranspose(256, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-        model.add(layers.BatchNormalization())
-        model.add(layers.ReLU())
+        # 6×6 → 12×12
+        model.add(layers.Conv2DTranspose(256, (4, 4), strides=(2, 2), padding='same', use_bias=False))
+        model.add(layers.BatchNormalization(momentum=0.8))
+        model.add(layers.LeakyReLU(0.2))
 
-        # 14×14 → 28×28
-        model.add(layers.Conv2DTranspose(128, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-        model.add(layers.BatchNormalization())
-        model.add(layers.ReLU())
+        # 12×12 → 24×24
+        model.add(layers.Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', use_bias=False))
+        model.add(layers.BatchNormalization(momentum=0.8))
+        model.add(layers.LeakyReLU(0.2))
 
-        # 28×28 → 56×56
-        model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-        model.add(layers.BatchNormalization())
-        model.add(layers.ReLU())
+        # 24×24 → 48×48
+        model.add(layers.Conv2DTranspose(64, (4, 4), strides=(2, 2), padding='same', use_bias=False))
+        model.add(layers.BatchNormalization(momentum=0.8))
+        model.add(layers.LeakyReLU(0.2))
 
-        # 56×56 → 84×84 (custom stride to hit exact size)
-        # Using output_padding to get exactly 84
-        model.add(layers.Conv2DTranspose(32, (5, 5), strides=(2, 2), padding='valid', use_bias=False))
-        # This gives us 115×115, so we crop
-        model.add(layers.Cropping2D(cropping=((15, 16), (15, 16))))  # Crop to 84×84
-        model.add(layers.BatchNormalization())
-        model.add(layers.ReLU())
+        # 48×48 → 96×96
+        model.add(layers.Conv2DTranspose(32, (4, 4), strides=(2, 2), padding='same', use_bias=False))
+        model.add(layers.BatchNormalization(momentum=0.8))
+        model.add(layers.LeakyReLU(0.2))
 
-        # Final conv to get 1 channel with tanh
+        # Final conv to 1 channel
         model.add(layers.Conv2D(1, (3, 3), padding='same', activation='tanh'))
+
+        # Crop 96×96 → 84×84
+        model.add(layers.Cropping2D(cropping=((6, 6), (6, 6))))
 
         return model
 
     def _build_discriminator(self):
         """
         Discriminator: 84×84×1 image → real/fake probability
-        Key: NO batch normalization (causes issues), use layer normalization or none
+        No batch normalization (causes training issues).
         """
         model = models.Sequential(name='discriminator')
 
         model.add(layers.Input(shape=(84, 84, 1)))
 
+        # Add noise for stability
+        model.add(layers.GaussianNoise(0.1))
+
         # 84×84 → 42×42
-        model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same'))
+        model.add(layers.Conv2D(64, (4, 4), strides=(2, 2), padding='same'))
         model.add(layers.LeakyReLU(0.2))
+        model.add(layers.Dropout(0.25))
 
         # 42×42 → 21×21
-        model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
+        model.add(layers.Conv2D(128, (4, 4), strides=(2, 2), padding='same'))
         model.add(layers.LeakyReLU(0.2))
-        model.add(layers.Dropout(0.3))
+        model.add(layers.Dropout(0.25))
 
         # 21×21 → 11×11
-        model.add(layers.Conv2D(256, (5, 5), strides=(2, 2), padding='same'))
+        model.add(layers.Conv2D(256, (4, 4), strides=(2, 2), padding='same'))
         model.add(layers.LeakyReLU(0.2))
-        model.add(layers.Dropout(0.3))
+        model.add(layers.Dropout(0.25))
 
         # 11×11 → 6×6
-        model.add(layers.Conv2D(512, (5, 5), strides=(2, 2), padding='same'))
+        model.add(layers.Conv2D(512, (4, 4), strides=(2, 2), padding='same'))
         model.add(layers.LeakyReLU(0.2))
 
         model.add(layers.Flatten())
@@ -479,75 +571,75 @@ class DCGAN:
 
         return model
 
-    def train_step(self, real_images):
-        """Single training step with proper gradient handling"""
-        if tf.is_tensor(real_images):
-            real_images = real_images.numpy()
+    def _train_step_impl(self, real_images):
+        """
+        Internal training step implementation.
+        """
+        batch_size = tf.shape(real_images)[0]
 
-        batch_size = len(real_images)
+        # Label smoothing for stability
+        real_labels = tf.ones((batch_size, 1)) * 0.9
+        fake_labels = tf.zeros((batch_size, 1)) + 0.1
 
-        # === Labels with smoothing ===
-        real_labels = np.ones((batch_size, 1)) * 0.9  # Smooth to 0.9
-        fake_labels = np.zeros((batch_size, 1)) + 0.1  # Smooth to 0.1
+        # Train Discriminator
+        noise = tf.random.normal((batch_size, self.latent_dim))
 
-        # === Train Discriminator ===
-        noise = np.random.normal(0, 1, (batch_size, self.latent_dim))
-        fake_images = self.generator.predict(noise, verbose=0)
-
-        # Train on real
-        with tf.GradientTape() as tape:
+        with tf.GradientTape() as d_tape:
+            fake_images = self.generator(noise, training=True)
             real_pred = self.discriminator(real_images, training=True)
-            d_loss_real = self.loss_fn(real_labels, real_pred)
-        grads = tape.gradient(d_loss_real, self.discriminator.trainable_variables)
-        self.d_optimizer.apply_gradients(zip(grads, self.discriminator.trainable_variables))
-
-        # Train on fake
-        with tf.GradientTape() as tape:
             fake_pred = self.discriminator(fake_images, training=True)
-            d_loss_fake = self.loss_fn(fake_labels, fake_pred)
-        grads = tape.gradient(d_loss_fake, self.discriminator.trainable_variables)
-        self.d_optimizer.apply_gradients(zip(grads, self.discriminator.trainable_variables))
 
-        d_loss = 0.5 * (d_loss_real + d_loss_fake)
+            d_loss_real = self.bce(real_labels, real_pred)
+            d_loss_fake = self.bce(fake_labels, fake_pred)
+            d_loss = 0.5 * (d_loss_real + d_loss_fake)
 
-        # Calculate accuracy
-        real_acc = np.mean((real_pred.numpy() > 0.5).astype(float))
-        fake_acc = np.mean((fake_pred.numpy() < 0.5).astype(float))
+        d_grads = d_tape.gradient(d_loss, self.discriminator.trainable_variables)
+        self.d_optimizer.apply_gradients(zip(d_grads, self.discriminator.trainable_variables))
+
+        #  Train Generator
+        noise = tf.random.normal((batch_size, self.latent_dim))
+
+        with tf.GradientTape() as g_tape:
+            fake_images = self.generator(noise, training=True)
+            fake_pred = self.discriminator(fake_images, training=False)
+            g_loss = self.bce(tf.ones((batch_size, 1)), fake_pred)
+
+        g_grads = g_tape.gradient(g_loss, self.generator.trainable_variables)
+        self.g_optimizer.apply_gradients(zip(g_grads, self.generator.trainable_variables))
+
+        # Calculate discriminator accuracy
+        real_acc = tf.reduce_mean(tf.cast(real_pred > 0.5, tf.float32))
+        fake_acc = tf.reduce_mean(tf.cast(fake_pred < 0.5, tf.float32))
         d_acc = 0.5 * (real_acc + fake_acc)
 
-        # === Train Generator (twice for balance) ===
-        g_losses = []
-        for _ in range(2):
-            noise = np.random.normal(0, 1, (batch_size, self.latent_dim))
-            with tf.GradientTape() as tape:
-                fake_images = self.generator(noise, training=True)
-                fake_pred = self.discriminator(fake_images, training=True)
-                g_loss = self.loss_fn(np.ones((batch_size, 1)), fake_pred)  # Want D to say "real"
-            grads = tape.gradient(g_loss, self.generator.trainable_variables)
-            self.g_optimizer.apply_gradients(zip(grads, self.generator.trainable_variables))
-            g_losses.append(g_loss.numpy())
+        return d_loss, g_loss, d_acc
 
-        return float(d_loss.numpy()), float(np.mean(g_losses)), float(d_acc)
+    def train_step(self, real_images):
+        """Public training step that uses compiled function."""
+        return self._train_step(real_images)
 
     def generate_images(self, num_images):
-        noise = np.random.normal(0, 1, (num_images, self.latent_dim))
-        generated = self.generator.predict(noise, verbose=0)
-        generated = (generated + 1) / 2.0  # [-1,1] → [0,1]
-        return generated
+        """Generate images for visualization/evaluation."""
+        noise = tf.random.normal([num_images, self.latent_dim])
+        generated = self.generator(noise, training=False)
+        generated = (generated + 1.0) / 2.0  # [-1,1] → [0,1]
+        return generated.numpy()
+
+    def generate_from_fixed_noise(self):
+        """Generate images from fixed noise for consistent visualization."""
+        generated = self.generator(self.fixed_noise, training=False)
+        generated = (generated + 1.0) / 2.0
+        return generated.numpy()
 
     def check_mode_collapse(self, num_samples=100):
-        """Check for mode collapse by measuring generation diversity"""
+        """Check for mode collapse by measuring generation diversity."""
         images = self.generate_images(num_samples)
-        images = (images * 2.0) - 1.0  # Convert back to [-1, 1] for analysis
+        images = (images * 2.0) - 1.0
 
-        # Measure diversity via standard deviation across samples
         pixel_std = np.std(images, axis=0).mean()
 
-        # Measure pairwise distances
         flat_images = images.reshape(num_samples, -1)
-
-        # Sample pairwise distances
-        indices = np.random.choice(num_samples, size=(100, 2), replace=True)
+        indices = np.random.choice(num_samples, size=(min(100, num_samples), 2), replace=True)
         distances = np.linalg.norm(
             flat_images[indices[:, 0]] - flat_images[indices[:, 1]],
             axis=1
@@ -555,133 +647,154 @@ class DCGAN:
         mean_distance = np.mean(distances)
 
         return {
-            'pixel_std': pixel_std,
-            'mean_pairwise_distance': mean_distance,
+            'pixel_std': float(pixel_std),
+            'mean_pairwise_distance': float(mean_distance),
             'is_collapsed': pixel_std < 0.1 or mean_distance < 10
         }
 
 
-def train_gan(X_all, epochs=50, batch_size=128, latent_dim=100,
-              save_interval=10, early_stop_patience=10):
-    """GAN training with mode collapse detection."""
+def train_gan(X_all, epochs=50, batch_size=128, latent_dim=128,
+              save_interval=10, early_stop_patience=15,
+              d_acc_threshold=0.5, d_acc_patience=10):
+    """
+    Optimized GAN training function with accuracy-based early stopping.
+    """
+
+    print("DCGAN TRAINING ")
+
 
     gan = DCGAN(latent_dim=latent_dim, img_size=(84, 84))
 
+    print("\nGenerator architecture:")
+    gan.generator.summary()
+    print("\nDiscriminator architecture:")
+    gan.discriminator.summary()
+
+    # Create optimized dataset with caching
     dataset = tf.data.Dataset.from_tensor_slices(X_all)
-    dataset = dataset.shuffle(10000).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    dataset = dataset.shuffle(buffer_size=min(10000, len(X_all)))
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.cache()  # Cache in memory for faster epochs
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
+    steps_per_epoch = len(X_all) // batch_size
+    print(f"\nTraining configuration:")
+    print(f"  Samples: {len(X_all)}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Steps per epoch: {steps_per_epoch}")
+    print(f"  Epochs: {epochs}")
+    print(f"  Latent dim: {latent_dim}")
+    print(f"  D accuracy threshold: {d_acc_threshold} (±0.1)")
+    print(f"  D accuracy patience: {d_acc_patience} epochs")
 
     d_losses, g_losses, d_accuracies = [], [], []
     best_diversity = 0
     patience_counter = 0
+    acc_threshold_counter = 0  # Counter for accuracy-based stopping
 
-    print(f"\nStarting GAN training for {epochs} epochs...")
-    print(f"Training samples: {len(X_all)}, Batch size: {batch_size}")
-    print("-" * 60)
+
+    print("Starting training...")
+
+
+    start_time = time.time()
 
     for epoch in range(epochs):
-        epoch_d_loss, epoch_g_loss, epoch_d_acc = [], [], []
+        epoch_start = time.time()
 
-        for batch in dataset:
+        # Use lists to accumulate losses
+        epoch_d_loss = []
+        epoch_g_loss = []
+        epoch_d_acc = []
+
+        for step, batch in enumerate(dataset):
             d_loss, g_loss, d_acc = gan.train_step(batch)
-            # FIXED: These are already floats, no .numpy() needed
+
+            # Only convert to float at the end of accumulation
             epoch_d_loss.append(d_loss)
             epoch_g_loss.append(g_loss)
             epoch_d_acc.append(d_acc)
 
-        d_losses.append(np.mean(epoch_d_loss))
-        g_losses.append(np.mean(epoch_g_loss))
-        d_accuracies.append(np.mean(epoch_d_acc))
+            # Print progress less frequently to reduce overhead
+            if (step + 1) % 200 == 0:
+                print(f"  Epoch {epoch+1} - Step {step+1}/{steps_per_epoch}", end='\r')
 
-        # Check for mode collapse every 5 epochs
+        # Convert to numpy only once per epoch
+        mean_d_loss = float(tf.reduce_mean(epoch_d_loss))
+        mean_g_loss = float(tf.reduce_mean(epoch_g_loss))
+        mean_d_acc = float(tf.reduce_mean(epoch_d_acc))
+
+        d_losses.append(mean_d_loss)
+        g_losses.append(mean_g_loss)
+        d_accuracies.append(mean_d_acc)
+
+        epoch_time = time.time() - epoch_start
+
+        # Accuracy-based early stopping
+
+        if abs(mean_d_acc - d_acc_threshold) <= 0.1:
+            acc_threshold_counter += 1
+            if acc_threshold_counter >= d_acc_patience:
+                print(f"\n✓ Discriminator accuracy stable at {mean_d_acc:.4f} for {d_acc_patience} epochs.")
+                print(f"  Training converged! Stopping early at epoch {epoch + 1}.")
+                # Save final samples before stopping
+                _save_epoch_samples(gan, epoch + 1)
+                break
+        else:
+            acc_threshold_counter = 0  # Reset counter if accuracy moves away
+
+        # Mode collapse check every 5 epochs
         if (epoch + 1) % 5 == 0:
             collapse_check = gan.check_mode_collapse()
             diversity = collapse_check['mean_pairwise_distance']
 
-            print(f"Epoch {epoch + 1}/{epochs} - "
-                  f"D_loss: {d_losses[-1]:.4f}, G_loss: {g_losses[-1]:.4f}, "
-                  f"D_acc: {d_accuracies[-1]:.4f}, Diversity: {diversity:.2f}")
+            print(f"\nEpoch {epoch + 1}/{epochs} ({epoch_time:.1f}s) - "
+                  f"D_loss: {mean_d_loss:.4f}, G_loss: {mean_g_loss:.4f}, "
+                  f"D_acc: {mean_d_acc:.4f}, Diversity: {diversity:.2f}")
 
             if collapse_check['is_collapsed']:
-                print("  ⚠️  Warning: Possible mode collapse detected!")
+                print("Possible mode collapse detected!")
                 patience_counter += 1
                 if patience_counter >= early_stop_patience // 5:
-                    print("  ❌ Stopping early due to mode collapse")
+                    print("Stopping early due to mode collapse")
                     break
             else:
                 patience_counter = 0
                 if diversity > best_diversity:
                     best_diversity = diversity
+                    print(f"New best diversity: {diversity:.2f}")
         else:
-            print(f"Epoch {epoch + 1}/{epochs} - "
-                  f"D_loss: {d_losses[-1]:.4f}, G_loss: {g_losses[-1]:.4f}, "
-                  f"D_acc: {d_accuracies[-1]:.4f}")
+            print(f"Epoch {epoch + 1}/{epochs} ({epoch_time:.1f}s) - "
+                  f"D_loss: {mean_d_loss:.4f}, G_loss: {mean_g_loss:.4f}, "
+                  f"D_acc: {mean_d_acc:.4f}")
 
+        # Save samples periodically
         if (epoch + 1) % save_interval == 0:
             _save_epoch_samples(gan, epoch + 1)
 
-    visualize_gan_training(gan, d_losses, g_losses, d_accuracies)
+    total_time = time.time() - start_time
+
 
     return gan, d_losses, g_losses, d_accuracies
 
 
 def _save_epoch_samples(gan, epoch, num_samples=16):
-    images = gan.generate_images(num_samples)
+    """Save generated samples at checkpoint."""
+    images = gan.generate_from_fixed_noise()
 
     fig, axes = plt.subplots(4, 4, figsize=(10, 10))
     for i, ax in enumerate(axes.flat):
-        ax.imshow(images[i, :, :, 0], cmap='gray')
+        if i < len(images):
+            ax.imshow(images[i, :, :, 0], cmap='gray')
         ax.axis('off')
-    plt.suptitle(f'Generated Samples - Epoch {epoch}')
+    plt.suptitle(f'Generated Samples - Epoch {epoch}', fontsize=14)
+    plt.tight_layout()
     plt.savefig(f'generated_epoch_{epoch}.png', dpi=100, bbox_inches='tight')
     plt.close()
+    print(f"  ✓ Saved samples: generated_epoch_{epoch}.png")
 
 
-def visualize_gan_training(gan, d_losses, g_losses, d_accuracies):
-    # FIXED: Generate 16 samples to match 4x4 grid
-    num_samples = 16
-    generated_images = gan.generate_images(num_samples)
 
-    fig, axes = plt.subplots(4, 4, figsize=(10, 10))
-    for i, ax in enumerate(axes.flat):
-        ax.imshow(generated_images[i, :, :, 0], cmap='gray')
-        ax.axis('off')
-    plt.suptitle('Final Generated Samples')
-    plt.savefig('generated_samples.png', dpi=100, bbox_inches='tight')
-    plt.close()
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-
-    axes[0].plot(d_losses, label='Discriminator', alpha=0.8)
-    axes[0].plot(g_losses, label='Generator', alpha=0.8)
-    axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss')
-    axes[0].set_title('Training Losses')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-
-    axes[1].plot(d_accuracies, color='green', alpha=0.8)
-    axes[1].axhline(y=0.5, color='r', linestyle='--', label='Ideal (0.5)')
-    axes[1].set_xlabel('Epoch')
-    axes[1].set_ylabel('Accuracy')
-    axes[1].set_title('Discriminator Accuracy')
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-
-    loss_ratio = np.array(g_losses) / (np.array(d_losses) + 1e-8)
-    axes[2].plot(loss_ratio, color='purple', alpha=0.8)
-    axes[2].axhline(y=1.0, color='r', linestyle='--', label='Balanced (1.0)')
-    axes[2].set_xlabel('Epoch')
-    axes[2].set_ylabel('G_loss / D_loss')
-    axes[2].set_title('Loss Ratio (Training Balance)')
-    axes[2].legend()
-    axes[2].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig('gan_training_curves.png', dpi=150, bbox_inches='tight')
-    plt.close()
-
-    print("\n✓ Generated samples saved as 'generated_samples.png'")
-    print("✓ Training curves saved as 'gan_training_curves.png'")
+# TASK 5B: Augumented Training
 
 
 def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
@@ -689,41 +802,26 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
                               num_synthetic=10000, epochs=15,
                               batch_size=128,
                               confidence_threshold=0.8):
-    """Augmented training with pseudo-labeling."""
 
-    print(f"\n{'=' * 60}")
-    print("AUGMENTED TRAINING PIPELINE")
-    print(f"{'=' * 60}")
+
+    print("Augumented Training Pipeline")
+
 
     # Step 1: Generate synthetic images
-    print(f"\n[1/5] Generating {num_synthetic} synthetic images...")
+    print(f"\nGenerating {num_synthetic} synthetic images...")
     synthetic_images = gan.generate_images(num_synthetic)
+    print(f"Generated shape: {synthetic_images.shape}")
 
     # Step 2: Quality assessment
-    print("\n[2/5] Assessing synthetic image quality...")
+    print("\nAssessing synthetic image quality...")
     syn_mean, syn_std = np.mean(synthetic_images), np.std(synthetic_images)
     real_mean, real_std = np.mean(X_train_real), np.std(X_train_real)
 
     print(f"  Synthetic - Mean: {syn_mean:.4f}, Std: {syn_std:.4f}")
     print(f"  Real      - Mean: {real_mean:.4f}, Std: {real_std:.4f}")
 
-    # Save comparison
-    fig, axes = plt.subplots(2, 8, figsize=(16, 4))
-    for i in range(8):
-        axes[0, i].imshow(X_train_real[i, :, :, 0], cmap='gray')
-        axes[0, i].axis('off')
-        if i == 0:
-            axes[0, i].set_title('Real')
-        axes[1, i].imshow(synthetic_images[i, :, :, 0], cmap='gray')
-        axes[1, i].axis('off')
-        if i == 0:
-            axes[1, i].set_title('Synthetic')
-    plt.savefig('real_vs_synthetic_comparison.png', dpi=100, bbox_inches='tight')
-    plt.close()
-    print("  ✓ Saved comparison: 'real_vs_synthetic_comparison.png'")
-
     # Step 3: Pseudo-labeling
-    print(f"\n[3/5] Pseudo-labeling with confidence threshold {confidence_threshold}...")
+    print(f"\nPseudo-labeling with confidence threshold {confidence_threshold}...")
 
     if not os.path.exists('multilabel_cnn.keras'):
         raise FileNotFoundError("Baseline model 'multilabel_cnn.keras' not found!")
@@ -747,12 +845,12 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
           f"({100 * num_high_conf / num_synthetic:.1f}%)")
 
     if num_high_conf < 1000:
-        print(f"  ⚠️  Warning: Only {num_high_conf} high-confidence samples.")
-        print(f"      Lowering threshold to 0.6...")
-        confidence_threshold = 0.6
+        print(f"Only {num_high_conf} high-confidence samples.")
+        print(f"Lowering threshold to 0.5...")
+        confidence_threshold = 0.5
         high_conf_mask = min_confidence >= confidence_threshold
         num_high_conf = np.sum(high_conf_mask)
-        print(f"  New high-confidence count: {num_high_conf}")
+        print(f"New high-confidence count: {num_high_conf}")
 
     synthetic_images_filtered = synthetic_images[high_conf_mask]
     p1_filtered = p1[high_conf_mask]
@@ -760,7 +858,7 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
     p3_filtered = p3[high_conf_mask]
 
     # Step 4: Combine datasets
-    print(f"\n[4/5] Combining datasets...")
+    print(f"\nCombining datasets...")
 
     if len(y_train_real.shape) == 1:
         y1_real = y_train_real // 100
@@ -781,9 +879,8 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
     print(f"  Total augmented:   {len(X_augmented)}")
 
     # Step 5: Train augmented model
-    print(f"\n[5/5] Training augmented model...")
+    print(f"\nTraining augmented model...")
 
-    # Extract validation data
     X_val, y1_val, y2_val, y3_val = extract_split_dataset(val_ds)
     X_test, y1_test, y2_test, y3_test = extract_split_dataset(test_ds)
 
@@ -821,32 +918,8 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
     )
     training_time = time.time() - start_time
 
-    # Save training curves
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['loss'], label='Train Loss')
-    plt.plot(history.history['val_loss'], label='Val Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.title('Augmented Model - Total Loss')
-    plt.grid(True, alpha=0.3)
-
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['out_1_accuracy'], label='Train Acc (D1)')
-    plt.plot(history.history['val_out_1_accuracy'], label='Val Acc (D1)')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    plt.title('Augmented Model - Digit 1 Accuracy')
-    plt.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig('augmented_training_curves.png', dpi=100, bbox_inches='tight')
-    plt.close()
-
     # Evaluation
-    print("\n[Evaluation] Testing augmented model...")
+    print("\nTesting augmented model...")
 
     preds_test = model_augmented.predict({'img_in': X_test}, verbose=0)
     p1_test = np.argmax(preds_test[0], axis=1)
@@ -863,9 +936,9 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
     acc2 = accuracy_score(y2_test, p2_test)
     acc3 = accuracy_score(y3_test, p3_test)
 
-    print(f"\n{'=' * 40}")
+
     print("AUGMENTED MODEL RESULTS")
-    print(f"{'=' * 40}")
+
     print(f"Combined Accuracy: {combined_accuracy:.4f}")
     print(f"F1 Score (macro):  {f1:.4f}")
     print(f"Per-digit Accuracy: D1={acc1:.4f}, D2={acc2:.4f}, D3={acc3:.4f}")
@@ -879,5 +952,13 @@ def train_with_augmented_data(gan, train_ds, val_ds, test_ds,
         'f1_score': f1,
         'per_digit_accuracy': [acc1, acc2, acc3],
         'training_time': training_time,
-        'num_synthetic_used': len(synthetic_images_filtered)
+        'num_synthetic_used': len(synthetic_images_filtered),
+        'y_true': y_true_combined,
+        'y_pred': y_pred_combined,
+        'synthetic_images': synthetic_images_filtered,
+        'confidence_stats': {
+            'threshold': confidence_threshold,
+            'num_high_conf': num_high_conf,
+            'total_generated': num_synthetic
+        }
     }

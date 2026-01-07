@@ -5,7 +5,8 @@ import joblib
 import Builder as bm
 import pre_processing as pp
 import visualise as vs
-from visualise import plot_hyperparameter_tuning
+from pre_processing import show_samples
+#from visualise import plot_hyperparameter_tuning
 
 devices = tf.config.list_physical_devices()
 print(f"Total available devices: {devices}")
@@ -35,7 +36,7 @@ def main():
     epochs = 10
 
     # For testing/debugging, set to True to use subset of data
-    USE_SUBSET = True  # Set to True for quick testing (~15 min vs 1-2 hours)
+    USE_SUBSET = False  # Set to True for quick testing
     SUBSET_SIZE = 5000
 
 
@@ -43,17 +44,19 @@ def main():
 
 
     # 1. Load and prepare datasets
-    print("\n[1/5] Loading datasets...")
+    print("\nLoading datasets...")
     train_ds = pp.prepare_dataset("triple_mnist/train/", img_size, batch_size)
     val_ds = pp.prepare_dataset("triple_mnist/val/", img_size, batch_size)
     test_ds = pp.prepare_dataset("triple_mnist/test/", img_size, batch_size)
 
+    show_samples(train_ds)
+
     # Convert to NumPy arrays for scikit-learn compatibility
-    X_train, y_train = pp.split_dataset(train_ds)
+    X_train, y_train = pp.split_dataset(train_ds, )
     X_val, y_val = pp.split_dataset(val_ds)
     X_test, y_test = pp.split_dataset(test_ds)
 
-    # Optional: Use subset for faster testing/debugging
+    # Use subset for faster testing/debugging
     if USE_SUBSET:
         print(f"DEBUG MODE ACTIVE")
         X_train = X_train[:SUBSET_SIZE]
@@ -67,7 +70,7 @@ def main():
     num_classes = 1000
 
     # 2. Hyperparameter tuning for Logistic Regression
-    print("\n[2/5] Tuning Logistic Regression hyperparameters...")
+    print("\nTuning Logistic Regression hyperparameters...")
     lr_tune = []
     for c in [0.1, 1.0]:
         print(f"  Testing C={c}...")
@@ -103,7 +106,7 @@ def main():
     print(f"  Best learning rate: {best_lr}")
 
     # 4. Train final models with best hyperparameters
-    print("\n[4/5] Training final models on full training set...")
+    print("\nTraining final models on full training set...")
 
     # Logistic Regression
     print("  Training Logistic Regression...")
@@ -139,7 +142,7 @@ def main():
 
 
     # Save the best model
-    print("\n[5/5] Saving best model...")
+    print("\nSaving best model...")
     if res_lr['accuracy'] > res_cnn['accuracy']:
         joblib.dump(model_lr, 'best_model.pkl')
         print("Logistic Regression performed better.")
@@ -153,7 +156,7 @@ def main():
     print("\nGenerating visualizations...")
     cnn_preds = np.argmax(final_cnn.predict(X_test, verbose=0), axis=1)
     vs.plot_benchmark_results(df_results, res_cnn['history'], lr_tune, y_test, cnn_preds)
-    vs,plot_hyperparameter_tuning(lr_tune, cnn_tune)
+    #vs,plot_hyperparameter_tuning(lr_tune, cnn_tune)
 
 
 

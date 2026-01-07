@@ -4,19 +4,8 @@ import os
 import matplotlib.pyplot as plt
 
 
-def prepare_dataset(path, IMG_SIZE, BATCH_SIZE, split=False):
-    """
-    Prepares a TensorFlow dataset from a directory of images.
+def prepare_dataset(path, IMG_SIZE, BATCH_SIZE=128, split=False, gan_mode=False):
 
-    Args:
-        path: Path to directory containing class subdirectories
-        IMG_SIZE: Tuple of (height, width) for resizing images
-        BATCH_SIZE: Number of samples per batch
-        split: If True, format data for split/Siamese model with separate digit labels
-
-    Returns:
-        TensorFlow dataset ready for training/evaluation
-    """
     # Get sorted list of existing folders to maintain consistent class ordering
     existing_folders = sorted([
         f for f in os.listdir(path)
@@ -40,7 +29,10 @@ def prepare_dataset(path, IMG_SIZE, BATCH_SIZE, split=False):
 
     def transform_data(x, y):
         """Normalize images and map labels to actual class numbers."""
-        x = tf.cast(x, tf.float32) / 255.0
+        if gan_mode:
+            x = (x -127.5)/127.5
+        else:
+            x = tf.cast(x, tf.float32) / 255.0
         y_actual = tf.gather(folder_to_actual_int, y)
         return x, y_actual
 
@@ -68,15 +60,7 @@ def prepare_dataset(path, IMG_SIZE, BATCH_SIZE, split=False):
 
 
 def split_dataset(dataset):
-    """
-    Converts a TensorFlow dataset into NumPy arrays.
 
-    Args:
-        dataset: TensorFlow dataset
-
-    Returns:
-        Tuple of (X, y) as NumPy arrays
-    """
     X_list, y_list = [], []
     for images, labels in dataset:
         X_list.append(images.numpy())
@@ -85,24 +69,13 @@ def split_dataset(dataset):
 
 
 def show_samples(dataset_path, num_samples=16, img_size=(84, 84), save_path='dataset_samples.png'):
-    """
-    Display and save random samples from the Triple-MNIST dataset.
 
-    Args:
-        dataset_path: Path to dataset directory (e.g., "triple_mnist_cleaned/train/")
-        num_samples: Number of samples to display (default: 16, must be perfect square)
-        img_size: Image size tuple (height, width)
-        save_path: Path to save the visualization
 
-    Returns:
-        None (displays and saves visualization)
-    """
-    print(f"\n{'=' * 70}")
-    print(f"LOADING SAMPLES FROM: {dataset_path}")
-    print(f"{'=' * 70}\n")
+    print(f"Loading Samples from: {dataset_path}")
+
 
     # Load dataset
-    ds = prepare_dataset(dataset_path, img_size, batch_size=num_samples, split=False)
+    ds = prepare_dataset(dataset_path, img_size, BATCH_SIZE= num_samples, split=False)
 
     # Get one batch of samples
     for images, labels in ds.take(1):
@@ -139,39 +112,21 @@ def show_samples(dataset_path, num_samples=16, img_size=(84, 84), save_path='dat
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"✓ Visualization saved as '{save_path}'")
+    print(f"Visualization saved as '{save_path}'")
     plt.show()
-
-    # Print statistics
-    print(f"\n{'=' * 70}")
-    print("DATASET STATISTICS")
-    print(f"{'=' * 70}")
-    print(f"Number of samples shown: {num_samples}")
-    print(f"Image shape: {images_np[0].shape}")
-    print(f"Image data type: {images_np[0].dtype}")
-    print(f"Pixel value range: [{images_np.min():.3f}, {images_np.max():.3f}]")
-    print(f"\nLabels shown: {', '.join([f'{int(l):03d}' for l in labels_np])}")
 
     # Analyze label distribution
     unique_labels = np.unique(labels_np)
     print(f"\nUnique labels in batch: {len(unique_labels)}")
     print(f"Label range: {int(labels_np.min()):03d} - {int(labels_np.max()):03d}")
-    print(f"{'=' * 70}\n")
+
 
 
 def analyze_dataset_structure(base_path="triple_mnist"):
-    """
-    Analyze and report on the dataset structure.
 
-    Args:
-        base_path: Base path to the dataset
 
-    Returns:
-        Dictionary with dataset statistics
-    """
-    print(f"\n{'=' * 70}")
     print("DATASET STRUCTURE ANALYSIS")
-    print(f"{'=' * 70}\n")
+
 
     splits = ['train', 'val', 'test']
     stats = {}
@@ -180,7 +135,7 @@ def analyze_dataset_structure(base_path="triple_mnist"):
         split_path = os.path.join(base_path, split)
 
         if not os.path.exists(split_path):
-            print(f"❌ {split_path} does not exist!")
+            print(f"{split_path} does not exist!")
             continue
 
         # Get all class folders
@@ -207,5 +162,5 @@ def analyze_dataset_structure(base_path="triple_mnist"):
         print(f"  Total images: {stats[split]['total_images']}")
         print(f"  Avg images/class: {stats[split]['avg_per_class']:.1f}\n")
 
-    print(f"{'=' * 70}\n")
+
     return stats
